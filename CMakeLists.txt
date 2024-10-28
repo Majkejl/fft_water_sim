@@ -5,10 +5,16 @@ project(
     LANGUAGES CXX C
 )
 
+
+#add_subdirectory(source)
+add_subdirectory(webgpu)
+
 add_executable(fft_water_sim main.cpp)
 
-add_subdirectory(source)
-add_subdirectory(webgpu)
+target_link_libraries(fft_water_sim PRIVATE webgpu)
+
+target_copy_webgpu_binaries(fft_water_sim)
+
 
 set_target_properties(fft_water_sim PROPERTIES
     CXX_STANDARD 23
@@ -17,7 +23,23 @@ set_target_properties(fft_water_sim PROPERTIES
     COMPILE_WARNING_AS_ERROR ON
 )
 
-target_compile_options(fft_water_sim PRIVATE /W4)
+if (MSVC)
+	target_compile_options(fft_water_sim PRIVATE /W4)
+else()
+	target_compile_options(fft_water_sim PRIVATE -Wall -Wextra -pedantic)
+endif()
 
+if (XCODE)
+	set_target_properties(fft_water_sim PROPERTIES
+		XCODE_GENERATE_SCHEME ON
+		XCODE_SCHEME_ENABLE_GPU_FRAME_CAPTURE_MODE "Metal"
+	)
+endif()
 
-target_link_libraries(fft_water_sim PRIVATE webgpu)
+# Options that are specific to Emscripten
+if (EMSCRIPTEN)
+	# Generate a full web page rather than a simple WebAssembly module
+	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
+    # Enable the use of emscripten_sleep()
+    target_link_options(App PRIVATE -sASYNCIFY)
+endif()

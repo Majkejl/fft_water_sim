@@ -5,7 +5,7 @@ project(
     LANGUAGES CXX C # programming languages used by the project
 )
 
-add_executable(fft_water_sim source/main.cpp)
+add_subdirectory(source)
 
 set_target_properties(fft_water_sim PROPERTIES
     CXX_STANDARD 23

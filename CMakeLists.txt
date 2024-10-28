@@ -6,6 +6,7 @@ project(
 )
 
 add_subdirectory(source)
+add_subdirectory(webgpu)
 
 set_target_properties(fft_water_sim PROPERTIES
     CXX_STANDARD 23
@@ -16,6 +17,5 @@ set_target_properties(fft_water_sim PROPERTIES
 
 target_compile_options(fft_water_sim PRIVATE /W4)
 
-add_subdirectory(webgpu)
 
 target_link_libraries(fft_water_sim PRIVATE webgpu)

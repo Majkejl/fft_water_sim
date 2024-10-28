@@ -33,6 +33,4 @@ else (EMSCRIPTEN)
 
 endif (EMSCRIPTEN)
 
-# Does nothing, as this dawn-based distribution of WebGPU is statically linked
-function(target_copy_webgpu_binaries Target)
 endfunction()

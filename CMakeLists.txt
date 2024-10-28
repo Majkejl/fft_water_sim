@@ -41,5 +41,5 @@ if (EMSCRIPTEN)
 	# Generate a full web page rather than a simple WebAssembly module
 	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
     # Enable the use of emscripten_sleep()
-    target_link_options(App PRIVATE -sASYNCIFY)
+    target_link_options(fft_water_sim PRIVATE -sASYNCIFY)
 endif()

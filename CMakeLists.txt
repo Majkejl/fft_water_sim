@@ -5,6 +5,8 @@ project(
     LANGUAGES CXX C
 )
 
+add_executable(fft_water_sim main.cpp)
+
 add_subdirectory(source)
 add_subdirectory(webgpu)
 

@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.0...3.25)
 project(
     fft_water_sim
-    VERSION 0.1.0 # any version number
-    LANGUAGES CXX C # programming languages used by the project
+    VERSION 0.1.0 
+    LANGUAGES CXX C
 )
 
 add_subdirectory(source)

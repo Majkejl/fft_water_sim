@@ -1,4 +1,5 @@
 #include <webgpu/webgpu.h>
+#include <GLFW/glfw3.h>
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -6,6 +7,8 @@
 #ifdef __EMSCRIPTEN__
 #  include <emscripten.h>
 #endif // __EMSCRIPTEN__
+
+
 
 /**
  * Utility function to get a WebGPU adapter, so that
@@ -59,6 +62,49 @@ WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions 
 
     return userData.adapter;
 }
+
+/**
+ * Utility function to get a WebGPU device, so that
+ *     WGPUAdapter device = requestDeviceSync(adapter, options);
+ * is roughly equivalent to
+ *     const device = await adapter.requestDevice(descriptor);
+ * It is very similar to requestAdapter
+ */
+WGPUDevice requestDeviceSync(WGPUAdapter adapter, WGPUDeviceDescriptor const * descriptor) {
+    struct UserData {
+        WGPUDevice device = nullptr;
+        bool requestEnded = false;
+    };
+    UserData userData;
+
+    auto onDeviceRequestEnded = [](WGPURequestDeviceStatus status, WGPUDevice device, char const * message, void * pUserData) {
+        UserData& userData = *reinterpret_cast<UserData*>(pUserData);
+        if (status == WGPURequestDeviceStatus_Success) {
+            userData.device = device;
+        } else {
+            std::cout << "Could not get WebGPU device: " << message << std::endl;
+        }
+        userData.requestEnded = true;
+    };
+
+    wgpuAdapterRequestDevice(
+        adapter,
+        descriptor,
+        onDeviceRequestEnded,
+        (void*)&userData
+    );
+
+#ifdef __EMSCRIPTEN__
+    while (!userData.requestEnded) {
+        emscripten_sleep(100);
+    }
+#endif // __EMSCRIPTEN__
+
+    assert(userData.requestEnded);
+
+    return userData.device;
+}
+
 
 int main (int, char**) {
 	// We create a descriptor
@@ -153,9 +199,24 @@ int main (int, char**) {
 	std::cout << std::dec; // Restore decimal numbers
 
 
+	std::cout << "Requesting device..." << std::endl;
+
+	WGPUDeviceDescriptor deviceDesc = {};
+	deviceDesc.nextInChain = nullptr;
+	deviceDesc.label = "My Device"; // anything works here, that's your call
+	deviceDesc.requiredFeatureCount = 0; // we do not require any specific feature
+	deviceDesc.requiredLimits = nullptr; // we do not require any specific limit
+	deviceDesc.defaultQueue.nextInChain = nullptr;
+	deviceDesc.defaultQueue.label = "The default queue";
+	deviceDesc.deviceLostCallback = nullptr;
+	WGPUDevice device = requestDeviceSync(adapter, &deviceDesc);
+
+	std::cout << "Got device: " << device << std::endl;
+
 	// We clean up the WebGPU instance
 	wgpuInstanceRelease(instance);
 	wgpuAdapterRelease(adapter);
+	wgpuDeviceRelease(device);
 
 	return 0;
 }

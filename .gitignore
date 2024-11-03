@@ -33,4 +33,5 @@
 
 # Specific
 .vs
+.vscode
 build*

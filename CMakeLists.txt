@@ -9,7 +9,13 @@ project(
 #add_subdirectory(source)
 add_subdirectory(webgpu)
 
-add_executable(fft_water_sim main.cpp Application.h)
+add_executable(fft_water_sim
+    main.cpp 
+    Application.h
+    Application.cpp
+    webgpu-utils.h    
+    webgpu-utils.cpp    
+)
 
 target_link_libraries(fft_water_sim PRIVATE webgpu)
 # Add the 'glfw' target as a dependency of our App

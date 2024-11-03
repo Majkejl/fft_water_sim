@@ -1,13 +1,5 @@
-#include <webgpu/webgpu.h>
-#include <GLFW/glfw3.h>
-#include <iostream>
-#include <cassert>
-#include <vector>
 
-#ifdef __EMSCRIPTEN__
-#  include <emscripten.h>
-#endif // __EMSCRIPTEN__
-
+#include "Application.h"
 
 
 /**
@@ -212,6 +204,8 @@ int main (int, char**) {
 	WGPUDevice device = requestDeviceSync(adapter, &deviceDesc);
 
 	std::cout << "Got device: " << device << std::endl;
+
+	
 
 	// We clean up the WebGPU instance
 	wgpuInstanceRelease(instance);

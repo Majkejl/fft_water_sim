@@ -4,10 +4,16 @@ project(
     VERSION 0.1.0 
     LANGUAGES CXX C
 )
-
-
-#add_subdirectory(source)
+    
+if (NOT EMSCRIPTEN)
+    add_subdirectory(glfw)
+else()
+    add_library(glfw INTERFACE)
+    target_link_options(glfw INTERFACE -sUSE_GLFW=3)
+endif()
+    
 add_subdirectory(webgpu)
+add_subdirectory(glfw3webgpu)
 
 add_executable(fft_water_sim
     main.cpp 
@@ -17,9 +23,7 @@ add_executable(fft_water_sim
     webgpu-utils.cpp    
 )
 
-target_link_libraries(fft_water_sim PRIVATE webgpu)
-# Add the 'glfw' target as a dependency of our App
-target_link_libraries(fft_water_sim PRIVATE webgpu glfw)
+target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu)
 
 target_copy_webgpu_binaries(fft_water_sim)
 
@@ -44,19 +48,9 @@ if (XCODE)
 	)
 endif()
 
-# Options that are specific to Emscripten
 if (EMSCRIPTEN)
-	# Generate a full web page rather than a simple WebAssembly module
 	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
-    # Enable the use of emscripten_sleep()
     target_link_options(fft_water_sim PRIVATE -sASYNCIFY)
 endif()
 
 
-if (NOT EMSCRIPTEN)
-    add_subdirectory(glfw)
-else()
-    # Emscripten has built-in support for GLFW but requires the `-sUSE_GLFW=3` link option:
-    add_library(glfw INTERFACE)
-    target_link_options(glfw INTERFACE -sUSE_GLFW=3)
-endif()

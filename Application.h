@@ -12,6 +12,10 @@
 #  include <emscripten.h>
 #endif // __EMSCRIPTEN__
 
+#ifdef WEBGPU_BACKEND_WGPU
+#  include <webgpu/wgpu.h>
+#endif // WEBGPU_BACKEND_WGPU
+
 
 class Application
 {
@@ -26,5 +30,8 @@ public:
     void MainLoop();
 
     bool IsRunning();
+
+private:
+    WGPUTextureView GetNextSurfaceTextureView();
 
 };

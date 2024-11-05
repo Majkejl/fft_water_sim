@@ -1,7 +1,10 @@
 #pragma once
 
+#define WEBGPU_CPP_IMPLEMENTATION
+
 #include "webgpu-utils.h"
-#include <webgpu/webgpu.h>
+// #include <webgpu/webgpu.h>
+#include "webgpu/webgpu.hpp"
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 #include <iostream>
@@ -20,9 +23,10 @@
 class Application
 {
     GLFWwindow *window;
-    WGPUDevice device;
-    WGPUQueue queue;
-    WGPUSurface surface;
+    wgpu::Device device;
+    wgpu::Queue queue;
+    wgpu::Surface surface;
+    std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 public:
     Application(int width, int height);
     ~Application();
@@ -32,6 +36,6 @@ public:
     bool IsRunning();
 
 private:
-    WGPUTextureView GetNextSurfaceTextureView();
+    wgpu::TextureView GetNextSurfaceTextureView();
 
 };

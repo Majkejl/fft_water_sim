@@ -17,9 +17,7 @@ add_subdirectory(glfw3webgpu)
 
 add_executable(fft_water_sim
     main.cpp 
-    Application.h
     Application.cpp
-    webgpu-utils.h    
     webgpu-utils.cpp    
 )
 

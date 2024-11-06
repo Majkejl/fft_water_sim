@@ -1,4 +1,6 @@
 
+#define WEBGPU_CPP_IMPLEMENTATION
+
 #include "Application.h"
 
 Application::Application(int width, int height) // TODO : add throws on errors

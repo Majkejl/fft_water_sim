@@ -1,4 +1,11 @@
-# fft_water_sim
+Water simulation using FFT
+==============
+
+TODO: add fancy description
+
+
+Build
+-----
 
 ```bash
 # Build using wgpu-native backend

@@ -20,8 +20,10 @@ add_executable(fft_water_sim
     main.cpp 
     include/Application.h
     include/webgpu-utils.h
+    include/ResourceManager.h
     src/Application.cpp
     src/webgpu-utils.cpp  
+    src/ResourceManager.cpp
 )
 
 target_include_directories(fft_water_sim
@@ -29,6 +31,25 @@ target_include_directories(fft_water_sim
 )
 
 target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu)
+
+# We add an option to enable different settings when developing the app than
+# when distributing it.
+option(DEV_MODE "Set up development helper settings" ON)
+
+if(DEV_MODE)
+    # In dev mode, we load resources from the source tree, so that when we
+    # dynamically edit resources (like shaders), these are correctly
+    # versionned.
+    target_compile_definitions(fft_water_sim PRIVATE
+        RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources"
+    )
+else()
+    # In release mode, we just load resources relatively to wherever the
+    # executable is launched from, so that the binary is portable
+    target_compile_definitions(fft_water_sim PRIVATE
+        RESOURCE_DIR="./resources"
+    )
+endif()
 
 target_copy_webgpu_binaries(fft_water_sim)
 

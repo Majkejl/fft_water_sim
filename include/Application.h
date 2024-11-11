@@ -21,10 +21,27 @@
 class Application
 {
     GLFWwindow *window;
-    wgpu::Device device;
-    wgpu::Queue queue;
-    wgpu::Surface surface;
-    std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
+	wgpu::Device device;
+	wgpu::Queue queue;
+	wgpu::Surface surface;
+	std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
+	wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
+	wgpu::RenderPipeline pipeline;
+	wgpu::Buffer pointBuffer;
+	wgpu::Buffer indexBuffer;
+	wgpu::Buffer uniformBuffer;
+	uint32_t indexCount;
+	wgpu::BindGroup bindGroup;
+	wgpu::PipelineLayout layout;
+	wgpu::BindGroupLayout bindGroupLayout;
+
+private:
+    wgpu::TextureView GetNextSurfaceTextureView();
+
+    void InitPipeline();
+    wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+    void InitBuffers();
+	void InitBindGroups();
 public:
     Application(int width, int height);
     ~Application();
@@ -33,7 +50,5 @@ public:
 
     bool IsRunning();
 
-private:
-    wgpu::TextureView GetNextSurfaceTextureView();
 
 };

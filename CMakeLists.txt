@@ -15,10 +15,17 @@ endif()
 add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
 
+
 add_executable(fft_water_sim
-    main.cpp 
-    Application.cpp
-    webgpu-utils.cpp    
+main.cpp 
+include/Application.h
+include/webgpu-utils.h
+src/Application.cpp
+src/webgpu-utils.cpp  
+)
+
+target_include_directories(fft_water_sim
+     PUBLIC include
 )
 
 target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu)

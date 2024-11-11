@@ -76,7 +76,10 @@ endif()
 
 if (EMSCRIPTEN)
 	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
-    target_link_options(fft_water_sim PRIVATE -sASYNCIFY)
+    target_link_options(fft_water_sim PRIVATE 
+        -sASYNCIFY
+        --preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+    )
 endif()
 
 

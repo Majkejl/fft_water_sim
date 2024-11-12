@@ -35,4 +35,4 @@
 .vs
 .vscode
 build*
-emrun.bat
+*.bat

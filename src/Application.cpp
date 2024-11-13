@@ -6,6 +6,8 @@
 
 using namespace wgpu;
 
+#define MESH_SIZE 10
+
 Application::Application(int width, int height) // TODO : add throws on errors
 {
 	// Open window
@@ -211,6 +213,29 @@ TextureView Application::GetNextSurfaceTextureView() {
 	return targetView;
 }
 
+void Application::CreateGeometry(int size, std::vector<float>& pointData, std::vector<uint16_t>& indexData)
+{
+	pointData.clear();
+	indexData.clear();
+
+	for (int i = 0; i < size; i++)
+	{
+		for (int j = 0; j < size; j++)
+		{
+			pointData.push_back(static_cast<float>(j / size)); // x
+			pointData.push_back(static_cast<float>(i / size)); // y
+			pointData.push_back(0.f);		   				   // z
+
+			if (i < size - 1 && j < size - 1)
+			{
+				indexData.push_back(static_cast<uint16_t>(j + i * size));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
+			}
+		}
+	}
+}
+
 void Application::InitPipeline() {
 	std::cout << "Creating shader module..." << std::endl;
 	ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
@@ -229,23 +254,18 @@ void Application::InitPipeline() {
 	// We use one vertex buffer
 	VertexBufferLayout vertexBufferLayout;
 	// We now have 2 attributes
-	std::vector<VertexAttribute> vertexAttribs(2);
+	std::vector<VertexAttribute> vertexAttribs(1);
 	
 	// Describe the position attribute
 	vertexAttribs[0].shaderLocation = 0; // @location(0)
 	vertexAttribs[0].format = VertexFormat::Float32x2;
 	vertexAttribs[0].offset = 0;
-
-	// Describe the color attribute
-	vertexAttribs[1].shaderLocation = 1; // @location(1)
-	vertexAttribs[1].format = VertexFormat::Float32x3; // different type!
-	vertexAttribs[1].offset = 2 * sizeof(float); // non null offset!
 	
 	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
 	vertexBufferLayout.attributes = vertexAttribs.data();
 	
-	vertexBufferLayout.arrayStride = 5 * sizeof(float);
-	//                               ^^^^^^^^^^^^^^^^^ The new stride
+	vertexBufferLayout.arrayStride = 3 * sizeof(float);
+
 	vertexBufferLayout.stepMode = VertexStepMode::Vertex;
 	
 	pipelineDesc.vertex.bufferCount = 1;
@@ -352,14 +372,11 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 	// Don't forget to = Default
 	RequiredLimits requiredLimits = Default;
 
-	// We use at most 2 vertex attributes
-	requiredLimits.limits.maxVertexAttributes = 2;
-	// We should also tell that we use 1 vertex buffers
+
+	requiredLimits.limits.maxVertexAttributes = 1;
 	requiredLimits.limits.maxVertexBuffers = 1;
-	// Maximum size of a buffer is 15 vertices of 5 float each
-	requiredLimits.limits.maxBufferSize = 15 * 5 * sizeof(float);
-	// Maximum stride between 2 consecutive vertices in the vertex buffer
-	requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
+	requiredLimits.limits.maxBufferSize = MESH_SIZE * MESH_SIZE * 3 * sizeof(float);
+	requiredLimits.limits.maxVertexBufferArrayStride = 3 * sizeof(float);
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
 	requiredLimits.limits.maxInterStageShaderComponents = 3;
@@ -385,13 +402,15 @@ void Application::InitBuffers() {
 	std::vector<uint16_t> indexData;
 
 	// Here we use the new 'loadGeometry' function:
-	bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+	//bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
 
 	// Check for errors
-	if (!success) {
-		std::cerr << "Could not load geometry!" << std::endl;
-		exit(1);
-	}
+	//if (!success) {
+	//	std::cerr << "Could not load geometry!" << std::endl;
+	//	exit(1);
+	//}
+
+	CreateGeometry(MESH_SIZE, pointData, indexData);
 
 	// We now store the index count rather than the vertex count
 	indexCount = static_cast<uint32_t>(indexData.size());

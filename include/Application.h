@@ -38,6 +38,8 @@ class Application
 private:
     wgpu::TextureView GetNextSurfaceTextureView();
 
+	void CreateGeometry(int size , std::vector<float>& pointData, std::vector<uint16_t>& indexData);
+
     void InitPipeline();
     wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
     void InitBuffers();

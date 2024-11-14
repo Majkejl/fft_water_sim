@@ -19,7 +19,7 @@ struct VertexOutput {
 	// that this field must be handled by the rasterizer.
 	// (It can also refer to another field of another struct that would be used
 	// as input to the fragment shader.)
-	//@location(0) color: vec3f,
+	@location(0) jebem: vec3f,
 };
 
 // The memory location of the uniform is given by a pair of a *bind group* and a *binding*
@@ -32,12 +32,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // We now move the scene depending on the time!
     //offset += 0.3 * vec2f(cos(uTime), sin(uTime));
 
-    out.position = vec4f(in.position, 1.0);
-    //out.color = in.color;
+    out.position = vec4f(in.position.x * 2 - 1, 
+						 in.position.y * 2 - 1, 
+						 in.position.z,
+						 1.0);
+    out.jebem = in.position.xyz;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-	return in.position; // use the interpolated color coming from the vertex shader
+	return vec4f(in.jebem, 1.0); // use the interpolated color coming from the vertex shader
 }

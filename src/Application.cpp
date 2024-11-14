@@ -223,8 +223,8 @@ void Application::CreateGeometry(int size, std::vector<float>& pointData, std::v
 	{
 		for (int j = 0; j < size; j++)
 		{
-			pointData.push_back(static_cast<float>(j) / size); // x
-			pointData.push_back(static_cast<float>(i) / size); // y
+			pointData.push_back(static_cast<float>(j) / (size - 1)); // x
+			pointData.push_back(static_cast<float>(i) / (size - 1)); // y
 			pointData.push_back(0.f);		   				   // z
 
 			if (i < size - 1 && j < size - 1)
@@ -232,6 +232,9 @@ void Application::CreateGeometry(int size, std::vector<float>& pointData, std::v
 				indexData.push_back(static_cast<uint16_t>(j + i * size));
 				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
 				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + size + 1));
 			}
 		}
 	}

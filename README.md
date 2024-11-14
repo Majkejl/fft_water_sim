@@ -15,7 +15,7 @@ Steps
 - compute shader  
     - make it compute something   
     - shared memory/binding funny biz   
-- fft 
+- fft   
     -basic concept   
     - fft fancy model   
 - ***optimize***

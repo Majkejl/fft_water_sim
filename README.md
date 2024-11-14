@@ -3,6 +3,21 @@ Water simulation using FFT
 
 TODO: add fancy description
 
+Questions
+---------
+- @builtin    
+
+Steps
+-----
+- implement camera with all the important matrices   
+- make it movable(optional)   
+- compute shader init   
+- make it compute something   
+- shared memory/binding funny biz   
+- fft basic concept   
+- fft fancy model   
+- *optimize*
+
 
 Build
 -----

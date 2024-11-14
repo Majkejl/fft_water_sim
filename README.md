@@ -1,11 +1,11 @@
-Water simulation using FFT
+Water simulation using Fast Fourier Transform (webGPU)
 ==============
 
 **TODO:** add fancy description
 
 Questions
 ---------
-- @builtin    
+- @builtin how to
 
 Steps
 -----
@@ -15,8 +15,8 @@ Steps
 - compute shader  
     - make it compute something   
     - shared memory/binding funny biz   
-- fft   
-    -basic concept   
+- fft
+    - basic concept   
     - fft fancy model   
 - ***optimize***
 

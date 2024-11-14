@@ -151,6 +151,7 @@ void Application::MainLoop() {
 	// Replace `draw()` with `drawIndexed()` and `vertexCount` with `indexCount`
 	// The extra argument is an offset within the index buffer.
 	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
+	//renderPass.draw(50, 1, 0, 0);
 
 	renderPass.end();
 	renderPass.release();
@@ -222,15 +223,15 @@ void Application::CreateGeometry(int size, std::vector<float>& pointData, std::v
 	{
 		for (int j = 0; j < size; j++)
 		{
-			pointData.push_back(static_cast<float>(j / size)); // x
-			pointData.push_back(static_cast<float>(i / size)); // y
+			pointData.push_back(static_cast<float>(j) / size); // x
+			pointData.push_back(static_cast<float>(i) / size); // y
 			pointData.push_back(0.f);		   				   // z
 
 			if (i < size - 1 && j < size - 1)
 			{
 				indexData.push_back(static_cast<uint16_t>(j + i * size));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
 				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
+				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
 			}
 		}
 	}
@@ -414,6 +415,7 @@ void Application::InitBuffers() {
 
 	// We now store the index count rather than the vertex count
 	indexCount = static_cast<uint32_t>(indexData.size());
+	vertexCount = static_cast<uint32_t>(pointData.size());
 	
 	// Create vertex buffer
 	BufferDescriptor bufferDesc;

@@ -31,6 +31,7 @@ class Application
 	wgpu::Buffer indexBuffer;
 	wgpu::Buffer uniformBuffer;
 	uint32_t indexCount;
+	uint32_t vertexCount;
 	wgpu::BindGroup bindGroup;
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;

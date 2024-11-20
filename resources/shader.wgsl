@@ -34,9 +34,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     out.position = vec4f(in.position.x * 2 - 1, 
 						 in.position.y * 2 - 1, 
-						 in.position.z,
+						 (in.position.x + in.position.y) / 2,
 						 1.0);
-    out.jebem = in.position.xyz;
+    out.jebem = out.position.xyz;
     return out;
 }
 

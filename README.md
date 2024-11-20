@@ -5,7 +5,15 @@ Water simulation using Fast Fourier Transform (webGPU)
 
 Questions
 ---------
-- @builtin how to
+- *@builtin* how to
+
+
+Done
+----
+- indexed plane
+    - **TODO:** maybe don't use *#define*
+- vert + frag pipeline
+
 
 Steps
 -----
@@ -38,7 +46,9 @@ emcmake cmake -B build-emscripten
 cmake --build build-emscripten
 ```
 
-https://eliemichel.github.io/LearnWebGPU/
-https://webgpufundamentals.org
-https://webgpu.github.io/webgpu-samples/
-https://emscripten.org
+Sources
+-------
+- [LearnWebGPU](https://eliemichel.github.io/LearnWebGPU/)
+- [webgpufundamentals](https://webgpufundamentals.org)
+- [webgpu-samples](https://webgpu.github.io/webgpu-samples/)
+- [emscripten](https://emscripten.org)

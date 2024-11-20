@@ -6,7 +6,7 @@
 
 using namespace wgpu;
 
-#define MESH_SIZE 10
+#define MESH_SIZE 100
 
 Application::Application(int width, int height) // TODO : add throws on errors
 {
@@ -327,8 +327,18 @@ void Application::InitPipeline() {
 	fragmentState.targets = &colorTarget;
 	pipelineDesc.fragment = &fragmentState;
 
-	// We do not use stencil/depth testing for now
-	pipelineDesc.depthStencil = nullptr;
+	DepthStencilState depthStencilState = Default;
+	depthStencilState.depthCompare = CompareFunction::Less;
+	depthStencilState.depthWriteEnabled = true;
+	// Store the format in a variable as later parts of the code depend on it
+	TextureFormat depthTextureFormat = TextureFormat::Depth24Plus;
+	depthStencilState.format = depthTextureFormat;
+
+	// Deactivate the stencil alltogether
+	depthStencilState.stencilReadMask = 0;
+	depthStencilState.stencilWriteMask = 0;
+	
+	pipelineDesc.depthStencil = &depthStencilState;
 
 	// Samples per pixel
 	pipelineDesc.multisample.count = 1;

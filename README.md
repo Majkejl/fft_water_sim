@@ -28,7 +28,8 @@ Steps
     - shared memory/binding funny biz   
 - fft
     - basic concept   
-    - fft fancy model   
+    - fft fancy model
+- skybox
 - ***optimize***
 
 

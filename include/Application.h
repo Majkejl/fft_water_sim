@@ -20,12 +20,15 @@
 
 class Application
 {
+	unsigned int width, height;
     GLFWwindow *window;
 	wgpu::Device device;
 	wgpu::Queue queue;
 	wgpu::Surface surface;
 	std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 	wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
+	wgpu::TextureView depthTextureView;
+	wgpu::Texture  depthTexture;
 	wgpu::RenderPipeline pipeline;
 	wgpu::Buffer pointBuffer;
 	wgpu::Buffer indexBuffer;

@@ -8,7 +8,7 @@ using namespace wgpu;
 
 #define MESH_SIZE 100
 
-Application::Application(int width, int height) // TODO : add throws on errors
+Application::Application(int w, int h) : width(w), height(h) // TODO : add throws on errors
 {
 	// Open window
 	glfwInit();
@@ -89,6 +89,9 @@ Application::~Application()
 	uniformBuffer.release();
 	pointBuffer.release();
 	indexBuffer.release();
+	depthTextureView.release();
+	depthTexture.destroy();
+	depthTexture.release();
 	pipeline.release();
 	surface.unconfigure();
 	queue.release();
@@ -124,13 +127,40 @@ void Application::MainLoop() {
 	renderPassColorAttachment.loadOp = LoadOp::Clear;
 	renderPassColorAttachment.storeOp = StoreOp::Store;
 	renderPassColorAttachment.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
-#ifndef WEBGPU_BACKEND_WGPU
-	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-#endif // NOT WEBGPU_BACKEND_WGPU
+// #ifndef WEBGPU_BACKEND_WGPU // maybe important idk
+// 	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+// #endif // NOT WEBGPU_BACKEND_WGPU
 
 	renderPassDesc.colorAttachmentCount = 1;
 	renderPassDesc.colorAttachments = &renderPassColorAttachment;
-	renderPassDesc.depthStencilAttachment = nullptr;
+
+	// We now add a depth/stencil attachment:
+	RenderPassDepthStencilAttachment depthStencilAttachment;
+	// The view of the depth texture
+	depthStencilAttachment.view = depthTextureView;
+
+	// The initial value of the depth buffer, meaning "far"
+	depthStencilAttachment.depthClearValue = 1.0f;
+	// Operation settings comparable to the color attachment
+	depthStencilAttachment.depthLoadOp = LoadOp::Clear;
+	depthStencilAttachment.depthStoreOp = StoreOp::Store;
+	// we could turn off writing to the depth buffer globally here
+	depthStencilAttachment.depthReadOnly = false;
+
+	// Stencil setup, mandatory but unused
+	depthStencilAttachment.stencilClearValue = 0;
+
+#ifdef WEBGPU_BACKEND_WGPU
+	depthStencilAttachment.stencilLoadOp = LoadOp::Clear;
+	depthStencilAttachment.stencilStoreOp = StoreOp::Store;
+#else
+	depthStencilAttachment.stencilLoadOp = LoadOp::Undefined;
+	depthStencilAttachment.stencilStoreOp = StoreOp::Undefined;
+#endif
+	depthStencilAttachment.stencilReadOnly = true;
+
+	renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
+
 	renderPassDesc.timestampWrites = nullptr;
 
 	RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
@@ -337,8 +367,36 @@ void Application::InitPipeline() {
 	// Deactivate the stencil alltogether
 	depthStencilState.stencilReadMask = 0;
 	depthStencilState.stencilWriteMask = 0;
-	
+
 	pipelineDesc.depthStencil = &depthStencilState;
+
+	pipelineDesc.multisample.count = 1;	
+	pipelineDesc.multisample.mask = ~0u;
+	pipelineDesc.multisample.alphaToCoverageEnabled = false;
+
+	// Create the depth texture
+	TextureDescriptor depthTextureDesc;
+	depthTextureDesc.dimension = TextureDimension::_2D;
+	depthTextureDesc.format = depthTextureFormat;
+	depthTextureDesc.mipLevelCount = 1;
+	depthTextureDesc.sampleCount = 1;
+	depthTextureDesc.size = {width, height, 1};
+	depthTextureDesc.usage = TextureUsage::RenderAttachment;
+	depthTextureDesc.viewFormatCount = 1;
+	depthTextureDesc.viewFormats = (WGPUTextureFormat*)&depthTextureFormat;
+	depthTexture = device.createTexture(depthTextureDesc);
+	
+	// Create the view of the depth texture manipulated by the rasterizer
+	TextureViewDescriptor depthTextureViewDesc;
+	depthTextureViewDesc.aspect = TextureAspect::DepthOnly;
+	depthTextureViewDesc.baseArrayLayer = 0;
+	depthTextureViewDesc.arrayLayerCount = 1;
+	depthTextureViewDesc.baseMipLevel = 0;
+	depthTextureViewDesc.mipLevelCount = 1;
+	depthTextureViewDesc.dimension = TextureViewDimension::_2D;
+	depthTextureViewDesc.format = depthTextureFormat;
+	depthTextureView = depthTexture.createView(depthTextureViewDesc);
+
 
 	// Samples per pixel
 	pipelineDesc.multisample.count = 1;
@@ -401,6 +459,11 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
 	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4;
+
+	// For the depth buffer, we enable textures (up to the size of the window):
+	requiredLimits.limits.maxTextureDimension1D = height;
+	requiredLimits.limits.maxTextureDimension2D = width;
+	requiredLimits.limits.maxTextureArrayLayers = 1;
 
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we are may forward from the adapter's supported

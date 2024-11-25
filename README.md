@@ -3,9 +3,11 @@ Water simulation using Fast Fourier Transform (webGPU)
 
 **TODO:** add fancy description
 
-Questions
----------
+Questions/Problems
+------------------
 - *@builtin* how to
+- dawn/emscripten being *uncooperative*
+
 
 
 Done

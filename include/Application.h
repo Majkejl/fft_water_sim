@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -19,8 +20,22 @@
 #endif // WEBGPU_BACKEND_WGPU
 
 
+struct MyUniforms  // TODO: split perhaps into separate structs
+{
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 projection;
+	glm::vec3 eye_pos; float _pad1;
+
+	// TODO: add light maybe?
+};
+
 class Application
 {
+	// Uniforms
+	MyUniforms uniforms;
+
+	// No touchy here
 	uint32_t width, height;
     GLFWwindow *window;
 	wgpu::Device device;

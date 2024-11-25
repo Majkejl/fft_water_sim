@@ -6,6 +6,8 @@ Water simulation using Fast Fourier Transform (webGPU)
 Questions/Problems
 ------------------
 - *@builtin* how to
+- uniforms vs shader const
+- which way is up
 
 
 
@@ -14,13 +16,13 @@ Done
 - indexed plane
     - **TODO:** maybe don't use *#define*
 - vert + frag pipeline
+- camera
+    - all the important matrices   
+    -  **TODO:** make it movable(optional)   
 
 
 Steps
 -----
-- camera
-    - all the important matrices   
-    - make it movable(optional)   
 - compute shader  
     - make it compute something   
     - shared memory/binding funny biz   

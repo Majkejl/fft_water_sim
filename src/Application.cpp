@@ -105,8 +105,13 @@ void Application::MainLoop() {
 	glfwPollEvents();
 
 	// Update uniform buffer
-	float t = static_cast<float>(glfwGetTime()); // glfwGetTime returns a double
-	queue.writeBuffer(uniformBuffer, 0, &t, sizeof(float));
+	// TODO add (M)VP
+	uniforms.eye_pos = glm::vec3(2, 2, 2);
+	uniforms.projection = glm::perspective(glm::radians(45.0f), static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
+	uniforms.view = glm::lookAt(uniforms.eye_pos, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
+	uniforms.model = glm::scale(glm::translate(glm::mat4(1.f), glm::vec3(-1.f, -1.f, 0.f)),
+								glm::vec3(2.f, 2.f, 0.f));
+	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
 	// Get the next target texture view
 	TextureView targetView = GetNextSurfaceTextureView();
@@ -192,10 +197,10 @@ void Application::MainLoop() {
 	CommandBuffer command = encoder.finish(cmdBufferDescriptor);
 	encoder.release();
 
-	std::cout << "Submitting command..." << std::endl;
+	//std::cout << "Submitting command..." << std::endl;
 	queue.submit(1, &command);
 	command.release();
-	std::cout << "Command submitted." << std::endl;
+	//std::cout << "Command submitted." << std::endl;
 
 	// At the end of the frame
 	targetView.release();
@@ -412,9 +417,9 @@ void Application::InitPipeline() {
 	// The binding index as used in the @binding attribute in the shader
 	bindingLayout.binding = 0;
 	// The stage that needs to access this resource
-	bindingLayout.visibility = ShaderStage::Vertex;
+	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	bindingLayout.buffer.type = BufferBindingType::Uniform;
-	bindingLayout.buffer.minBindingSize = 4 * sizeof(float);
+	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -451,14 +456,14 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 	requiredLimits.limits.maxVertexBufferArrayStride = 3 * sizeof(float);
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
-	requiredLimits.limits.maxInterStageShaderComponents = 3;
+	requiredLimits.limits.maxInterStageShaderComponents = 6;
 
 	// We use at most 1 bind group for now
 	requiredLimits.limits.maxBindGroups = 1;
 	// We use at most 1 uniform buffer per stage
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
-	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4;
+	requiredLimits.limits.maxUniformBufferBindingSize = sizeof(MyUniforms);
 
 	// For the depth buffer, we enable textures (up to the size of the window):
 	requiredLimits.limits.maxTextureDimension1D = height;
@@ -515,7 +520,7 @@ void Application::InitBuffers() {
 	// Create uniform buffer (reusing bufferDesc from other buffer creations)
 	// The buffer will only contain 1 float with the value of uTime
 	// then 3 floats left empty but needed by alignment constraints
-	bufferDesc.size = 4 * sizeof(float);
+	bufferDesc.size = sizeof(MyUniforms);
 
 	// Make sure to flag the buffer as BufferUsage::Uniform
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
@@ -524,8 +529,10 @@ void Application::InitBuffers() {
 	uniformBuffer = device.createBuffer(bufferDesc);
 
 	// Upload uniform data
-	float currentTime = 1.0f;
-	queue.writeBuffer(uniformBuffer, 0, &currentTime, sizeof(float));
+	uniforms.model = glm::mat4(1.f);
+	uniforms.view = glm::mat4(1.f);
+	uniforms.projection = glm::mat4(1.f);
+	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 }
 
 void Application::InitBindGroups() {
@@ -539,7 +546,7 @@ void Application::InitBindGroups() {
 	// multiple uniform blocks.
 	binding.offset = 0;
 	// And we specify again the size of the buffer.
-	binding.size = 4 * sizeof(float);
+	binding.size = sizeof(MyUniforms);
 
 	// A bind group contains one or multiple bindings
 	BindGroupDescriptor bindGroupDesc{};

@@ -5,6 +5,7 @@
 #include "webgpu-utils.h"
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
+#include <glm/glm.hpp>
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -20,7 +21,7 @@
 
 class Application
 {
-	unsigned int width, height;
+	uint32_t width, height;
     GLFWwindow *window;
 	wgpu::Device device;
 	wgpu::Queue queue;

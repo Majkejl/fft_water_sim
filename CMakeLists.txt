@@ -14,6 +14,7 @@ endif()
     
 add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
+add_subdirectory(glm)
 
 
 add_executable(fft_water_sim
@@ -30,7 +31,7 @@ target_include_directories(fft_water_sim
      PUBLIC include
 )
 
-target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu)
+target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu glm)
 
 # We add an option to enable different settings when developing the app than
 # when distributing it.

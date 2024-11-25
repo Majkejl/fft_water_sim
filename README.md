@@ -17,18 +17,19 @@ Done
     - **TODO:** maybe don't use *#define*
 - vert + frag pipeline
 - camera
-    - all the important matrices   
-    -  **TODO:** make it movable(optional)   
+    - all the important matrices
+    -  **TODO:** make it movable(optional)
 
 
 Steps
 -----
-- compute shader  
-    - make it compute something   
-    - shared memory/binding funny biz   
+- compute shader
+    - make it compute something
+    - shared memory/binding funny biz
 - fft
-    - basic concept   
+    - basic concept
     - fft fancy model
+- smooth normals
 - skybox
 - ***optimize***
 

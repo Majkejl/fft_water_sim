@@ -127,9 +127,9 @@ void Application::MainLoop() {
 	renderPassColorAttachment.loadOp = LoadOp::Clear;
 	renderPassColorAttachment.storeOp = StoreOp::Store;
 	renderPassColorAttachment.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
-// #ifndef WEBGPU_BACKEND_WGPU // maybe important idk
-// 	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-// #endif // NOT WEBGPU_BACKEND_WGPU
+#ifndef WEBGPU_BACKEND_WGPU
+ 	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif // NOT WEBGPU_BACKEND_WGPU
 
 	renderPassDesc.colorAttachmentCount = 1;
 	renderPassDesc.colorAttachments = &renderPassColorAttachment;

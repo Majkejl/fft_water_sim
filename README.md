@@ -6,7 +6,6 @@ Water simulation using Fast Fourier Transform (webGPU)
 Questions/Problems
 ------------------
 - *@builtin* how to
-- dawn/emscripten being *uncooperative*
 
 
 

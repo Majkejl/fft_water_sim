@@ -5,9 +5,6 @@ Water simulation using Fast Fourier Transform (webGPU)
 
 Questions/Problems
 ------------------
-- *@builtin* how to
-- uniforms vs shader const
-- which way is up
 
 
 
@@ -30,8 +27,14 @@ Steps
     - basic concept
     - fft fancy model
 - smooth normals
-- skybox
+- ***pretify***
+    - PBR
+    - foam
+    - skybox
+    - dynamic detail (geo shader)
 - ***optimize***
+- ***build improvements***
+    - FetchContent vs zip in repo
 
 
 Build

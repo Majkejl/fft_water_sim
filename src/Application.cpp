@@ -3,10 +3,58 @@
 
 #include "Application.h"
 #include "ResourceManager.h"
+#include "PerlinNoise.hpp"
 
 using namespace wgpu;
 
 #define MESH_SIZE 100
+#define TEXTURE_SIZE 100
+
+// Creator funcs
+namespace {
+	void CreateGeometry(int size, std::vector<float>& pointData, std::vector<uint16_t>& indexData)
+	{
+		pointData.clear();
+		indexData.clear();
+
+		for (int i = 0; i < size; i++)
+		{
+			for (int j = 0; j < size; j++)
+			{
+				pointData.push_back(static_cast<float>(j) / (size - 1)); // x
+				pointData.push_back(static_cast<float>(i) / (size - 1)); // y
+				pointData.push_back(0.f);		   				   // z
+
+				if (i < size - 1 && j < size - 1)
+				{
+					indexData.push_back(static_cast<uint16_t>(j + i * size));
+					indexData.push_back(static_cast<uint16_t>(j + i * size + size));
+					indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
+					indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
+					indexData.push_back(static_cast<uint16_t>(j + i * size + size));
+					indexData.push_back(static_cast<uint16_t>(j + i * size + size + 1));
+				}
+			}
+		}
+	}
+
+	void CreateHeightMap(int size, std::vector<float>& heightMap)
+	{
+		heightMap.clear();
+
+		const siv::PerlinNoise::seed_type seed = { 123456u }; 
+		const siv::PerlinNoise perlin{ seed };
+
+		for (int i = 0; i < size; i++)
+		{
+			for (size_t j = 0; j < size; j++)
+			{
+				heightMap.push_back( static_cast<float>(perlin.octave2D_01(j * (0.1f), i * (0.1f), 6)) );
+			}
+		}
+	}
+
+}
 
 Application::Application(int w, int h) : width(w), height(h) // TODO : add throws on errors
 {
@@ -78,11 +126,15 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 
 	InitPipeline();
 	InitBuffers();
+	InitTextures();
 	InitBindGroups();
 }
 
 Application::~Application()
 {
+	heightTextureView.release();
+	heightTexture.destroy();
+	heightTexture.release();
 	bindGroup.release();
 	layout.release();
 	bindGroupLayout.release();
@@ -101,7 +153,8 @@ Application::~Application()
 	glfwTerminate();
 }
 
-void Application::MainLoop() {
+void Application::MainLoop() 
+{
 	glfwPollEvents();
 
 	// Update uniform buffer
@@ -215,11 +268,13 @@ void Application::MainLoop() {
 #endif
 }
 
-bool Application::IsRunning() {
+bool Application::IsRunning() 
+{
 	return !glfwWindowShouldClose(window);
 }
 
-TextureView Application::GetNextSurfaceTextureView() {
+TextureView Application::GetNextSurfaceTextureView() 
+{
 	// Get the surface texture
 	SurfaceTexture surfaceTexture;
 	surface.getCurrentTexture(&surfaceTexture);
@@ -249,33 +304,8 @@ TextureView Application::GetNextSurfaceTextureView() {
 	return targetView;
 }
 
-void Application::CreateGeometry(int size, std::vector<float>& pointData, std::vector<uint16_t>& indexData)
+void Application::InitPipeline() 
 {
-	pointData.clear();
-	indexData.clear();
-
-	for (int i = 0; i < size; i++)
-	{
-		for (int j = 0; j < size; j++)
-		{
-			pointData.push_back(static_cast<float>(j) / (size - 1)); // x
-			pointData.push_back(static_cast<float>(i) / (size - 1)); // y
-			pointData.push_back(0.f);		   				   // z
-
-			if (i < size - 1 && j < size - 1)
-			{
-				indexData.push_back(static_cast<uint16_t>(j + i * size));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + size));
-				indexData.push_back(static_cast<uint16_t>(j + i * size + size + 1));
-			}
-		}
-	}
-}
-
-void Application::InitPipeline() {
 	std::cout << "Creating shader module..." << std::endl;
 	ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
 	std::cout << "Shader module: " << shaderModule << std::endl;
@@ -412,19 +442,26 @@ void Application::InitPipeline() {
 	// Default value as well (irrelevant for count = 1 anyways)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-	// Define binding layout (don't forget to = Default)
-	BindGroupLayoutEntry bindingLayout = Default;
-	// The binding index as used in the @binding attribute in the shader
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
+
+	// The uniform buffer binding that we already had
+	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
 	bindingLayout.binding = 0;
-	// The stage that needs to access this resource
 	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	bindingLayout.buffer.type = BufferBindingType::Uniform;
 	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
 
+	// The texture binding
+	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
+	textureBindingLayout.binding = 1;
+	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	textureBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-	bindGroupLayoutDesc.entryCount = 1;
-	bindGroupLayoutDesc.entries = &bindingLayout;
+	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
+	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
 	bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
 
 	// Create the pipeline layout
@@ -441,14 +478,14 @@ void Application::InitPipeline() {
 	shaderModule.release();
 }
 
-RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
+RequiredLimits Application::GetRequiredLimits(Adapter adapter) const 
+{
 	// Get adapter supported limits, in case we need them
 	SupportedLimits supportedLimits;
 	adapter.getLimits(&supportedLimits);
 
 	// Don't forget to = Default
 	RequiredLimits requiredLimits = Default;
-
 
 	requiredLimits.limits.maxVertexAttributes = 1;
 	requiredLimits.limits.maxVertexBuffers = 1;
@@ -470,6 +507,9 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 	requiredLimits.limits.maxTextureDimension2D = width;
 	requiredLimits.limits.maxTextureArrayLayers = 1;
 
+	// Add the possibility to sample a texture in a shader
+	requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we are may forward from the adapter's supported
 	// limits.
@@ -478,7 +518,8 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 	return requiredLimits;
 }
 
-void Application::InitBuffers() {
+void Application::InitBuffers() 
+{
 	// Define data vectors, but without filling them in
 	std::vector<float> pointData;
 	std::vector<uint16_t> indexData;
@@ -535,24 +576,63 @@ void Application::InitBuffers() {
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 }
 
-void Application::InitBindGroups() {
-	// Create a binding
-	BindGroupEntry binding{};
-	// The index of the binding (the entries in bindGroupDesc can be in any order)
-	binding.binding = 0;
-	// The buffer it is actually bound to
-	binding.buffer = uniformBuffer;
-	// We can specify an offset within the buffer, so that a single buffer can hold
-	// multiple uniform blocks.
-	binding.offset = 0;
-	// And we specify again the size of the buffer.
-	binding.size = sizeof(MyUniforms);
+void Application::InitBindGroups() 
+{
+	std::vector<BindGroupEntry> bindings(2);
 
-	// A bind group contains one or multiple bindings
-	BindGroupDescriptor bindGroupDesc{};
+	bindings[0].binding = 0;
+	bindings[0].buffer = uniformBuffer;
+	bindings[0].offset = 0;
+	bindings[0].size = sizeof(MyUniforms);
+
+	bindings[1].binding = 1;
+	bindings[1].textureView = heightTextureView;
+
+	BindGroupDescriptor bindGroupDesc;
 	bindGroupDesc.layout = bindGroupLayout;
-	// There must be as many bindings as declared in the layout!
-	bindGroupDesc.entryCount = 1;
-	bindGroupDesc.entries = &binding;
+	bindGroupDesc.entryCount = (uint32_t)bindings.size();
+	bindGroupDesc.entries = bindings.data();
 	bindGroup = device.createBindGroup(bindGroupDesc);
+}
+
+void Application::InitTextures() 
+{
+	TextureDescriptor textureDesc;
+	textureDesc.dimension = TextureDimension::_2D;
+	textureDesc.size = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
+	textureDesc.mipLevelCount = 1;
+	textureDesc.sampleCount = 1;
+	textureDesc.format = TextureFormat::R32Float;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	textureDesc.viewFormatCount = 0;
+	textureDesc.viewFormats = nullptr;
+
+	heightTexture = device.createTexture(textureDesc);
+
+	TextureViewDescriptor textureViewDesc;
+	textureViewDesc.aspect = TextureAspect::All;
+	textureViewDesc.baseArrayLayer = 0;
+	textureViewDesc.arrayLayerCount = 1;
+	textureViewDesc.baseMipLevel = 0;
+	textureViewDesc.mipLevelCount = 1;
+	textureViewDesc.dimension = TextureViewDimension::_2D;
+	textureViewDesc.format = textureDesc.format;
+	heightTextureView = heightTexture.createView(textureViewDesc);
+
+	// fill with noise
+	std::vector<float> perlin;
+	CreateHeightMap(TEXTURE_SIZE, perlin);
+
+	ImageCopyTexture destination;
+	destination.texture = heightTexture;
+	destination.mipLevel = 0;
+	destination.origin = { 0, 0, 0 };
+	destination.aspect = TextureAspect::All;
+
+	TextureDataLayout source;
+	source.offset = 0;
+	source.bytesPerRow = TEXTURE_SIZE * sizeof(float);
+	source.rowsPerImage = TEXTURE_SIZE;
+
+	queue.writeTexture(destination, perlin.data(), perlin.size() * sizeof(float), source, textureDesc.size);
 }

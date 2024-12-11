@@ -19,6 +19,7 @@ add_subdirectory(glm)
 
 add_executable(fft_water_sim
     main.cpp 
+    include/PerlinNoise.hpp
     include/Application.h
     include/webgpu-utils.h
     include/ResourceManager.h

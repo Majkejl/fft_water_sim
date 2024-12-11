@@ -33,18 +33,21 @@ struct MyUniforms
 
 // The memory location of the uniform is given by a pair of a *bind group* and a *binding*
 @group(0) @binding(0) var<uniform> u: MyUniforms;
+@group(0) @binding(1) var heightTexture: texture_2d<f32>; 
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    out.fs_position = (u.model * vec4f(in.position, 1)).xyz;
+	var height = in.position.z + textureLoad(heightTexture, vec2i(in.position.xy), 0).r;
 
-    out.position = u.proj * u.view * u.model * vec4f(in.position, 1);
+    out.fs_position = (u.model * vec4f(in.position.xy, height, 1)).xyz;
+
+    out.position = u.proj * u.view * u.model * vec4f(in.position.xy, height, 1);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-	return vec4f(in.fs_position, 1.0);
+	return vec4f(vec3f(textureLoad(heightTexture, vec2i(in.fs_position.xy), 0).r), 1.0);
 }

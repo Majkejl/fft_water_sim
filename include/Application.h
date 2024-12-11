@@ -55,15 +55,16 @@ class Application
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;
 
+	wgpu::Texture heightTexture;
+	wgpu::TextureView heightTextureView;
+
 private:
     wgpu::TextureView GetNextSurfaceTextureView();
-
-	void CreateGeometry(int size , std::vector<float>& pointData, std::vector<uint16_t>& indexData);
-
-    void InitPipeline();
     wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+    void InitPipeline();
     void InitBuffers();
 	void InitBindGroups();
+	void InitTextures();
 public:
     Application(int width, int height);
     ~Application();

@@ -7,8 +7,8 @@
 
 using namespace wgpu;
 
-#define MESH_SIZE 100
-#define TEXTURE_SIZE 100
+#define MESH_SIZE 150
+#define TEXTURE_SIZE 300
 
 // Creator funcs
 namespace {
@@ -38,18 +38,19 @@ namespace {
 		}
 	}
 
-	void CreateHeightMap(int size, std::vector<float>& heightMap)
+	void CreateHeightMap(int size, std::vector<uint8_t>& heightMap)
 	{
 		heightMap.clear();
 
 		const siv::PerlinNoise::seed_type seed = { 123456u }; 
 		const siv::PerlinNoise perlin{ seed };
+		const float freq = 8.f / TEXTURE_SIZE;
 
 		for (int i = 0; i < size; i++)
 		{
-			for (size_t j = 0; j < size; j++)
+			for (int j = 0; j < size; j++) 
 			{
-				heightMap.push_back( static_cast<float>(perlin.octave2D_01(j * (0.1f), i * (0.1f), 6)) );
+				heightMap.push_back( static_cast<uint8_t>(255 * perlin.octave2D_01(j * freq, i * freq, 4)) );
 			}
 		}
 	}
@@ -159,11 +160,11 @@ void Application::MainLoop()
 
 	// Update uniform buffer
 	// TODO add (M)VP
-	uniforms.eye_pos = glm::vec3(2, 2, 2);
+	uniforms.eye_pos = glm::vec3(2.f, 2.f, 2.f);
 	uniforms.projection = glm::perspective(glm::radians(45.0f), static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
 	uniforms.view = glm::lookAt(uniforms.eye_pos, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
 	uniforms.model = glm::scale(glm::translate(glm::mat4(1.f), glm::vec3(-1.f, -1.f, 0.f)),
-								glm::vec3(2.f, 2.f, 0.f));
+								glm::vec3(2.f, 2.f, 1.f));
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
 	// Get the next target texture view
@@ -455,7 +456,7 @@ void Application::InitPipeline()
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
 	textureBindingLayout.binding = 1;
 	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
-	textureBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	// Create a bind group layout
@@ -602,7 +603,7 @@ void Application::InitTextures()
 	textureDesc.size = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
 	textureDesc.mipLevelCount = 1;
 	textureDesc.sampleCount = 1;
-	textureDesc.format = TextureFormat::R32Float;
+	textureDesc.format = TextureFormat::R8Unorm;
 	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
@@ -620,7 +621,7 @@ void Application::InitTextures()
 	heightTextureView = heightTexture.createView(textureViewDesc);
 
 	// fill with noise
-	std::vector<float> perlin;
+	std::vector<uint8_t> perlin;
 	CreateHeightMap(TEXTURE_SIZE, perlin);
 
 	ImageCopyTexture destination;
@@ -631,8 +632,8 @@ void Application::InitTextures()
 
 	TextureDataLayout source;
 	source.offset = 0;
-	source.bytesPerRow = TEXTURE_SIZE * sizeof(float);
+	source.bytesPerRow = TEXTURE_SIZE;
 	source.rowsPerImage = TEXTURE_SIZE;
 
-	queue.writeTexture(destination, perlin.data(), perlin.size() * sizeof(float), source, textureDesc.size);
+	queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);
 }

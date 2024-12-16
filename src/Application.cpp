@@ -159,8 +159,7 @@ void Application::MainLoop()
 	glfwPollEvents();
 
 	// Update uniform buffer
-	// TODO add (M)VP
-	uniforms.eye_pos = glm::vec3(2.f, 2.f, 2.f);
+	uniforms.eye_pos = glm::vec3(2.f);
 	uniforms.projection = glm::perspective(glm::radians(45.0f), static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
 	uniforms.view = glm::lookAt(uniforms.eye_pos, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
 	uniforms.model = glm::scale(glm::translate(glm::mat4(1.f), glm::vec3(-1.f, -1.f, 0.f)),
@@ -443,7 +442,7 @@ void Application::InitPipeline()
 	// Default value as well (irrelevant for count = 1 anyways)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
 
 	// The uniform buffer binding that we already had
 	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
@@ -458,6 +457,12 @@ void Application::InitPipeline()
 	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	// The texture sampler binding
+	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
+	samplerBindingLayout.binding = 2;
+	samplerBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -510,6 +515,8 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 
 	// Add the possibility to sample a texture in a shader
 	requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+
+	requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we are may forward from the adapter's supported
@@ -579,7 +586,7 @@ void Application::InitBuffers()
 
 void Application::InitBindGroups() 
 {
-	std::vector<BindGroupEntry> bindings(2);
+	std::vector<BindGroupEntry> bindings(3);
 
 	bindings[0].binding = 0;
 	bindings[0].buffer = uniformBuffer;
@@ -588,6 +595,9 @@ void Application::InitBindGroups()
 
 	bindings[1].binding = 1;
 	bindings[1].textureView = heightTextureView;
+
+	bindings[2].binding = 2;
+	bindings[2].sampler = sampler;
 
 	BindGroupDescriptor bindGroupDesc;
 	bindGroupDesc.layout = bindGroupLayout;
@@ -636,4 +646,18 @@ void Application::InitTextures()
 	source.rowsPerImage = TEXTURE_SIZE;
 
 	queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);
+
+	// Create a sampler
+	SamplerDescriptor samplerDesc;
+	samplerDesc.addressModeU = AddressMode::ClampToEdge;
+	samplerDesc.addressModeV = AddressMode::ClampToEdge;
+	samplerDesc.addressModeW = AddressMode::ClampToEdge;
+	samplerDesc.magFilter = FilterMode::Linear;
+	samplerDesc.minFilter = FilterMode::Linear;
+	samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
+	samplerDesc.lodMinClamp = 0.0f;
+	samplerDesc.lodMaxClamp = 1.0f;
+	samplerDesc.compare = CompareFunction::Undefined;
+	samplerDesc.maxAnisotropy = 1;
+	sampler = device.createSampler(samplerDesc);
 }

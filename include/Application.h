@@ -57,6 +57,7 @@ class Application
 
 	wgpu::Texture heightTexture;
 	wgpu::TextureView heightTextureView;
+	wgpu::Sampler sampler;
 
 private:
     wgpu::TextureView GetNextSurfaceTextureView();

@@ -5,9 +5,8 @@ Water simulation using Fast Fourier Transform (webGPU)
 
 Questions/Problems
 ------------------
-- height texture format
-- mesh size too big
-
+- textureSampleGrad -- dpdx/dpdy
+- compute command queue
 
 Done
 ----

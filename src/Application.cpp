@@ -125,6 +125,7 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	// Release the adapter only after it has been fully utilized
 	adapter.release();
 
+	//InitCompute();
 	InitPipeline();
 	InitBuffers();
 	InitTextures();
@@ -146,6 +147,7 @@ Application::~Application()
 	depthTexture.destroy();
 	depthTexture.release();
 	pipeline.release();
+	
 	surface.unconfigure();
 	queue.release();
 	surface.release();
@@ -482,6 +484,67 @@ void Application::InitPipeline()
 
 	// We no longer need to access the shader module
 	shaderModule.release();
+}
+
+void Application::InitCompute()
+{
+	// Load compute shader
+	ShaderModule computeShaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/compute.wgsl", device);
+
+	// Create compute pipeline layout
+	PipelineLayoutDescriptor pipelineLayoutDesc;
+	pipelineLayoutDesc.bindGroupLayoutCount = 1;
+	pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
+	layout = device.createPipelineLayout(pipelineLayoutDesc);
+
+	// Create compute pipeline
+	ComputePipelineDescriptor computePipelineDesc;
+	computePipelineDesc.compute.constantCount = 0;
+	computePipelineDesc.compute.constants = nullptr;
+	computePipelineDesc.compute.entryPoint = "cs_main";
+	computePipelineDesc.compute.module = computeShaderModule;
+	computePipelineDesc.layout = layout;
+	compPipeline = device.createComputePipeline(computePipelineDesc);
+}
+
+void Application::RunCompute() 
+{
+    // Initialize a command encoder
+    // Queue compQueue = device.getQueue(); 
+    CommandEncoderDescriptor encoderDesc = Default;
+    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+
+    // Create and use compute pass here!
+	// Create compute pass
+	ComputePassDescriptor computePassDesc;
+	computePassDesc.timestampWrites = nullptr;
+	ComputePassEncoder computePass = encoder.beginComputePass(computePassDesc);
+
+	// Use compute pass
+	computePass.setPipeline(compPipeline);
+	computePass.setBindGroup(0, bindGroup, 0, nullptr);
+	computePass.dispatchWorkgroups(1,1,1);
+
+
+	// Finalize compute pass
+	computePass.end();
+
+	// Clean up
+#if !defined(WEBGPU_BACKEND_WGPU)
+    wgpuComputePassEncoderRelease(computePass);
+#endif
+
+
+    // Encode and submit the GPU commands
+    CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
+    queue.submit(commands);
+
+    // Clean up
+#if !defined(WEBGPU_BACKEND_WGPU)
+    wgpuCommandBufferRelease(commands);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuQueueRelease(queue);
+#endif
 }
 
 RequiredLimits Application::GetRequiredLimits(Adapter adapter) const 

@@ -46,6 +46,7 @@ class Application
 	wgpu::TextureView depthTextureView;
 	wgpu::Texture  depthTexture;
 	wgpu::RenderPipeline pipeline;
+	wgpu::ComputePipeline compPipeline;
 	wgpu::Buffer pointBuffer;
 	wgpu::Buffer indexBuffer;
 	wgpu::Buffer uniformBuffer;
@@ -62,6 +63,7 @@ class Application
 private:
     wgpu::TextureView GetNextSurfaceTextureView();
     wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+	void InitCompute();
     void InitPipeline();
     void InitBuffers();
 	void InitBindGroups();
@@ -71,6 +73,7 @@ public:
     ~Application();
 
     void MainLoop();
+	void RunCompute();
 
     bool IsRunning();
 

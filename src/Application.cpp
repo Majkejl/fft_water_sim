@@ -125,11 +125,13 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	// Release the adapter only after it has been fully utilized
 	adapter.release();
 
-	//InitCompute();
+	InitCompute();
 	InitPipeline();
 	InitBuffers();
 	InitTextures();
 	InitBindGroups();
+
+	RunCompute();
 }
 
 Application::~Application()
@@ -147,7 +149,7 @@ Application::~Application()
 	depthTexture.destroy();
 	depthTexture.release();
 	pipeline.release();
-	
+	compPipeline.release();
 	surface.unconfigure();
 	queue.release();
 	surface.release();
@@ -492,10 +494,10 @@ void Application::InitCompute()
 	ShaderModule computeShaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/compute.wgsl", device);
 
 	// Create compute pipeline layout
-	PipelineLayoutDescriptor pipelineLayoutDesc;
-	pipelineLayoutDesc.bindGroupLayoutCount = 1;
-	pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
-	layout = device.createPipelineLayout(pipelineLayoutDesc);
+	// PipelineLayoutDescriptor pipelineLayoutDesc;
+	// pipelineLayoutDesc.bindGroupLayoutCount = 1;
+	// pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
+	// layout = device.createPipelineLayout(pipelineLayoutDesc);
 
 	// Create compute pipeline
 	ComputePipelineDescriptor computePipelineDesc;

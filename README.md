@@ -5,13 +5,13 @@ Water simulation using Fast Fourier Transform (webGPU)
 
 Questions/Problems
 ------------------
-- textureSampleGrad -- dpdx/dpdy
-- compute command queue
+
 
 Done
 ----
 - indexed plane
     - **TODO:** maybe don't use *#define*
+    - **TODO:** maybe don't hardcode values in shader
 - vert + frag pipeline
 - camera
     - all the important matrices

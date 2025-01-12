@@ -23,7 +23,7 @@ namespace {
 			{
 				pointData.push_back(static_cast<float>(j) / (size - 1)); // x
 				pointData.push_back(static_cast<float>(i) / (size - 1)); // y
-				pointData.push_back(0.f);		   				   // z
+				pointData.push_back(0.f);		   				         // z
 
 				if (i < size - 1 && j < size - 1)
 				{
@@ -51,6 +51,9 @@ namespace {
 			for (int j = 0; j < size; j++) 
 			{
 				heightMap.push_back( static_cast<uint8_t>(255 * perlin.octave2D_01(j * freq, i * freq, 4)) );
+				heightMap.push_back( 0 );
+				heightMap.push_back( 0 );
+				heightMap.push_back( 0 );
 			}
 		}
 	}
@@ -130,8 +133,6 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	InitBuffers();
 	InitTextures();
 	InitBindGroups();
-
-	RunCompute();
 }
 
 Application::~Application()
@@ -142,6 +143,8 @@ Application::~Application()
 	bindGroup.release();
 	layout.release();
 	bindGroupLayout.release();
+	c_layout.release();
+	c_bindGroupLayout.release();
 	uniformBuffer.release();
 	pointBuffer.release();
 	indexBuffer.release();
@@ -161,6 +164,8 @@ Application::~Application()
 void Application::MainLoop() 
 {
 	glfwPollEvents();
+
+	RunCompute();
 
 	// Update uniform buffer
 	uniforms.eye_pos = glm::vec3(2.f);
@@ -458,7 +463,7 @@ void Application::InitPipeline()
 	// The texture binding
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
 	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute;
 	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
@@ -494,10 +499,26 @@ void Application::InitCompute()
 	ShaderModule computeShaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/compute.wgsl", device);
 
 	// Create compute pipeline layout
-	// PipelineLayoutDescriptor pipelineLayoutDesc;
-	// pipelineLayoutDesc.bindGroupLayoutCount = 1;
-	// pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
-	// layout = device.createPipelineLayout(pipelineLayoutDesc);
+
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(1, Default);
+
+	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[0];
+	textureBindingLayout.binding = 1;
+	textureBindingLayout.visibility = ShaderStage::Compute;
+	textureBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
+	textureBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
+	textureBindingLayout.storageTexture.format = TextureFormat::RGBA8Unorm;
+
+	// Create a bind group layout
+	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
+	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
+	c_bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
+
+	PipelineLayoutDescriptor pipelineLayoutDesc;
+	pipelineLayoutDesc.bindGroupLayoutCount = 1;
+	pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&c_bindGroupLayout;
+	c_layout = device.createPipelineLayout(pipelineLayoutDesc);
 
 	// Create compute pipeline
 	ComputePipelineDescriptor computePipelineDesc;
@@ -505,14 +526,14 @@ void Application::InitCompute()
 	computePipelineDesc.compute.constants = nullptr;
 	computePipelineDesc.compute.entryPoint = "cs_main";
 	computePipelineDesc.compute.module = computeShaderModule;
-	computePipelineDesc.layout = layout;
+	computePipelineDesc.layout = c_layout;
 	compPipeline = device.createComputePipeline(computePipelineDesc);
 }
 
 void Application::RunCompute() 
 {
     // Initialize a command encoder
-    // Queue compQueue = device.getQueue(); 
+    Queue compQueue = device.getQueue(); 
     CommandEncoderDescriptor encoderDesc = Default;
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
@@ -525,24 +546,24 @@ void Application::RunCompute()
 	// Use compute pass
 	computePass.setPipeline(compPipeline);
 	computePass.setBindGroup(0, bindGroup, 0, nullptr);
-	computePass.dispatchWorkgroups(1,1,1);
+	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
 
 
 	// Finalize compute pass
 	computePass.end();
 
 	// Clean up
-#if !defined(WEBGPU_BACKEND_WGPU)
+#ifndef WEBGPU_BACKEND_WGPU
     wgpuComputePassEncoderRelease(computePass);
 #endif
 
 
     // Encode and submit the GPU commands
     CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
-    queue.submit(commands);
+    compQueue.submit(commands);
 
     // Clean up
-#if !defined(WEBGPU_BACKEND_WGPU)
+#ifndef WEBGPU_BACKEND_WGPU
     wgpuCommandBufferRelease(commands);
     wgpuCommandEncoderRelease(encoder);
     wgpuQueueRelease(queue);
@@ -678,8 +699,8 @@ void Application::InitTextures()
 	textureDesc.size = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
 	textureDesc.mipLevelCount = 1;
 	textureDesc.sampleCount = 1;
-	textureDesc.format = TextureFormat::R8Unorm;
-	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	textureDesc.format = TextureFormat::RGBA8Unorm;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst | TextureUsage::StorageBinding;
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
 
@@ -707,7 +728,7 @@ void Application::InitTextures()
 
 	TextureDataLayout source;
 	source.offset = 0;
-	source.bytesPerRow = TEXTURE_SIZE;
+	source.bytesPerRow = TEXTURE_SIZE * 4;
 	source.rowsPerImage = TEXTURE_SIZE;
 
 	queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);

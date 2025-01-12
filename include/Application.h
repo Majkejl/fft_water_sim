@@ -56,6 +56,10 @@ class Application
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;
 
+	wgpu::PipelineLayout c_layout;
+	wgpu::BindGroupLayout c_bindGroupLayout;
+
+
 	wgpu::Texture heightTexture;
 	wgpu::TextureView heightTextureView;
 	wgpu::Sampler sampler;

@@ -40,17 +40,17 @@ struct MyUniforms
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    out.fs_position = (u.model * vec4f(in.position.xyz, 1)).xyz;
+    out.fs_position = (u.model * vec4f(in.position.xyz, 1.0)).xyz;
 	
-	let tex_pos = vec2i((out.fs_position.xy + 1) * 149.5);
+	let tex_pos = vec2i((out.fs_position.xy + 1.0) * 159.5);
 	let height = textureLoad(heightTexture, tex_pos, 0).r * 0.3;
 	out.fs_position.z = height;
 
-    out.position = u.proj * u.view * u.model * vec4f(in.position.xy, height, 1);
+    out.position = u.proj * u.view * u.model * vec4f(in.position.xy, height, 1.0);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-	return vec4f(textureSample(heightTexture, textureSampler, (in.fs_position.xy + 1) / 2).rrr, 1.0);
+	return vec4f(textureSample(heightTexture, textureSampler, (in.fs_position.xy + 1.0) / 2.0).rrr, 1.0);
 }

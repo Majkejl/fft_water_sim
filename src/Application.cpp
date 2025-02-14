@@ -7,8 +7,8 @@
 
 using namespace wgpu;
 
-#define MESH_SIZE 150
-#define TEXTURE_SIZE 300
+#define MESH_SIZE 160
+#define TEXTURE_SIZE 320
 
 // Creator funcs
 namespace {
@@ -128,8 +128,8 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	// Release the adapter only after it has been fully utilized
 	adapter.release();
 
-	InitCompute();
 	InitPipeline();
+	InitCompute();
 	InitBuffers();
 	InitTextures();
 	InitBindGroups();
@@ -503,7 +503,7 @@ void Application::InitCompute()
 	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(1, Default);
 
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[0];
-	textureBindingLayout.binding = 1;
+	textureBindingLayout.binding = 0;
 	textureBindingLayout.visibility = ShaderStage::Compute;
 	textureBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
 	textureBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
@@ -545,7 +545,7 @@ void Application::RunCompute()
 
 	// Use compute pass
 	computePass.setPipeline(compPipeline);
-	computePass.setBindGroup(0, bindGroup, 0, nullptr);
+	computePass.setBindGroup(0, c_bindGroup, 0, nullptr);
 	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
 
 
@@ -588,7 +588,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.maxInterStageShaderComponents = 6;
 
 	// We use at most 1 bind group for now
-	requiredLimits.limits.maxBindGroups = 1;
+	requiredLimits.limits.maxBindGroups = 2;
 	// We use at most 1 uniform buffer per stage
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
@@ -609,6 +609,11 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	// limits.
 	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
 	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
+
+	requiredLimits.limits.maxComputeWorkgroupSizeX = 32;
+	requiredLimits.limits.maxComputeWorkgroupSizeY = 32;
+	requiredLimits.limits.maxComputeWorkgroupSizeZ = 1;
+	requiredLimits.limits.maxComputeInvocationsPerWorkgroup = 1024;
 	return requiredLimits;
 }
 
@@ -690,6 +695,20 @@ void Application::InitBindGroups()
 	bindGroupDesc.entryCount = (uint32_t)bindings.size();
 	bindGroupDesc.entries = bindings.data();
 	bindGroup = device.createBindGroup(bindGroupDesc);
+	
+	// compute
+	
+	bindings.clear();
+	bindings.emplace_back();
+	bindings[0].binding = 0;
+	bindings[0].textureView = heightTextureView;
+	
+	BindGroupDescriptor c_bindGroupDesc;
+	c_bindGroupDesc.layout = c_bindGroupLayout;
+	c_bindGroupDesc.entryCount = (uint32_t)bindings.size();
+	c_bindGroupDesc.entries = bindings.data();
+	c_bindGroup = device.createBindGroup(c_bindGroupDesc);
+
 }
 
 void Application::InitTextures() 

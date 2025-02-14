@@ -55,7 +55,8 @@ class Application
 	wgpu::BindGroup bindGroup;
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;
-
+	
+	wgpu::BindGroup c_bindGroup;
 	wgpu::PipelineLayout c_layout;
 	wgpu::BindGroupLayout c_bindGroupLayout;
 

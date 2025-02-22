@@ -12,8 +12,11 @@ fn cs_main(@builtin(global_invocation_id) id : vec3<u32>) {
     var height = 0.0;
     for (var i = 1; i <= 10; i++)
     {
-        height += pow(0.5, f32(i + 2)) * (sin(f32(id.x + u32(i)) * 0.05 * f32(i) + u.time));
-        height += pow(0.5, f32(i + 2)) * (sin(f32(id.y + u32(i)) * 0.05 * f32(i) + u.time));
+        var amp = pow(0.5, f32(i + 2));
+        var pos = f32(id.x) * cos(f32(i)) + f32(id.y) * sin(f32(i));
+        var freq = 0.05 * f32(i);
+        var shift = u.time * (0.3 + f32(i * 11 % 7) / 3.5);
+        height += amp * sin( pos * freq + shift);
     }
     textureStore(heightTexture, vec2i(id.xy), vec4f(height + 0.5));
 }

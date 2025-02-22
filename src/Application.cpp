@@ -165,6 +165,8 @@ void Application::MainLoop()
 {
 	glfwPollEvents();
 
+	c_uniforms.time = static_cast<float>(glfwGetTime());
+	queue.writeBuffer(uniformBuffer, (sizeof(MyUniforms) + 31) & ~31, &c_uniforms, sizeof(c_Uniforms));
 	RunCompute();
 
 	// Update uniform buffer
@@ -500,10 +502,16 @@ void Application::InitCompute()
 
 	// Create compute pipeline layout
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(1, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
 
-	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[0];
-	textureBindingLayout.binding = 0;
+	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
+	uniformBindingLayout.binding = 0;
+	uniformBindingLayout.visibility = ShaderStage::Compute;
+	uniformBindingLayout.buffer.type = BufferBindingType::Uniform;
+	uniformBindingLayout.buffer.minBindingSize = sizeof(c_Uniforms);
+
+	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
+	textureBindingLayout.binding = 1;
 	textureBindingLayout.visibility = ShaderStage::Compute;
 	textureBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
 	textureBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
@@ -592,7 +600,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	// We use at most 1 uniform buffer per stage
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
-	requiredLimits.limits.maxUniformBufferBindingSize = sizeof(MyUniforms);
+	requiredLimits.limits.maxUniformBufferBindingSize = sizeof(MyUniforms) + sizeof(c_Uniforms);
 
 	// For the depth buffer, we enable textures (up to the size of the window):
 	requiredLimits.limits.maxTextureDimension1D = height;
@@ -660,7 +668,7 @@ void Application::InitBuffers()
 	// Create uniform buffer (reusing bufferDesc from other buffer creations)
 	// The buffer will only contain 1 float with the value of uTime
 	// then 3 floats left empty but needed by alignment constraints
-	bufferDesc.size = sizeof(MyUniforms);
+	bufferDesc.size = ((sizeof(MyUniforms) + 31) & ~31) + sizeof(c_Uniforms);
 
 	// Make sure to flag the buffer as BufferUsage::Uniform
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
@@ -701,7 +709,14 @@ void Application::InitBindGroups()
 	bindings.clear();
 	bindings.emplace_back();
 	bindings[0].binding = 0;
-	bindings[0].textureView = heightTextureView;
+	bindings[0].buffer = uniformBuffer;
+	bindings[0].offset = (sizeof(MyUniforms) + 31) & ~31;
+	bindings[0].size = sizeof(c_Uniforms);
+	
+	
+	bindings.emplace_back();
+	bindings[1].binding = 1;
+	bindings[1].textureView = heightTextureView;
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;

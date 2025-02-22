@@ -30,10 +30,16 @@ struct MyUniforms  // TODO: split perhaps into separate structs
 	// TODO: add light maybe?
 };
 
+struct c_Uniforms
+{
+	float time; float _pad[3];
+};
+
 class Application
 {
 	// Uniforms
 	MyUniforms uniforms;
+	c_Uniforms c_uniforms;
 
 	// No touchy here
 	uint32_t width, height;

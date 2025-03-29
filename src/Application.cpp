@@ -10,6 +10,12 @@ using namespace wgpu;
 #define MESH_SIZE 160
 #define TEXTURE_SIZE 320
 
+#ifdef __EMSCRIPTEN__
+#define ALIGNMENT 255
+#else
+#define ALIGNMENT 31
+#endif
+
 // Creator funcs
 namespace {
 	void CreateGeometry(int size, std::vector<float>& pointData, std::vector<uint16_t>& indexData)
@@ -166,7 +172,7 @@ void Application::MainLoop()
 	glfwPollEvents();
 
 	c_uniforms.time = static_cast<float>(glfwGetTime());
-	queue.writeBuffer(uniformBuffer, (sizeof(MyUniforms) + 31) & ~31, &c_uniforms, sizeof(c_Uniforms));
+	queue.writeBuffer(uniformBuffer, (sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT, &c_uniforms, sizeof(c_Uniforms));
 	RunCompute();
 
 	// Update uniform buffer
@@ -260,7 +266,6 @@ void Application::MainLoop()
 	cmdBufferDescriptor.label = "Command buffer";
 	CommandBuffer command = encoder.finish(cmdBufferDescriptor);
 	encoder.release();
-
 	//std::cout << "Submitting command..." << std::endl;
 	queue.submit(1, &command);
 	command.release();
@@ -465,7 +470,7 @@ void Application::InitPipeline()
 	// The texture binding
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
 	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute;
+	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
@@ -502,7 +507,7 @@ void Application::InitCompute()
 
 	// Create compute pipeline layout
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
 
 	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
 	uniformBindingLayout.binding = 0;
@@ -516,6 +521,12 @@ void Application::InitCompute()
 	textureBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
 	textureBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
 	textureBindingLayout.storageTexture.format = TextureFormat::RGBA8Unorm;
+
+	BindGroupLayoutEntry& spectrumBindingLayout = bindingLayoutEntries[2];
+	spectrumBindingLayout.binding = 3;
+	spectrumBindingLayout.visibility = ShaderStage::Compute;
+	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -596,7 +607,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.maxInterStageShaderComponents = 6;
 
 	// We use at most 1 bind group for now
-	requiredLimits.limits.maxBindGroups = 2;
+	requiredLimits.limits.maxBindGroups = 1;
 	// We use at most 1 uniform buffer per stage
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
@@ -618,7 +629,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
 	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
 
-	requiredLimits.limits.maxComputeWorkgroupSizeX = 32;
+	requiredLimits.limits.maxComputeWorkgroupSizeX = 1024;
 	requiredLimits.limits.maxComputeWorkgroupSizeY = 32;
 	requiredLimits.limits.maxComputeWorkgroupSizeZ = 1;
 	requiredLimits.limits.maxComputeInvocationsPerWorkgroup = 1024;
@@ -668,7 +679,7 @@ void Application::InitBuffers()
 	// Create uniform buffer (reusing bufferDesc from other buffer creations)
 	// The buffer will only contain 1 float with the value of uTime
 	// then 3 floats left empty but needed by alignment constraints
-	bufferDesc.size = ((sizeof(MyUniforms) + 31) & ~31) + sizeof(c_Uniforms);
+	bufferDesc.size = ((sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT) + sizeof(c_Uniforms);
 
 	// Make sure to flag the buffer as BufferUsage::Uniform
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
@@ -710,13 +721,17 @@ void Application::InitBindGroups()
 	bindings.emplace_back();
 	bindings[0].binding = 0;
 	bindings[0].buffer = uniformBuffer;
-	bindings[0].offset = (sizeof(MyUniforms) + 31) & ~31;
+	bindings[0].offset = (sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT;
 	bindings[0].size = sizeof(c_Uniforms);
 	
 	
 	bindings.emplace_back();
 	bindings[1].binding = 1;
 	bindings[1].textureView = heightTextureView;
+
+	bindings.emplace_back();
+	bindings[2].binding = 3;
+	bindings[2].textureView = spectrumTextureView;
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;
@@ -734,12 +749,13 @@ void Application::InitTextures()
 	textureDesc.mipLevelCount = 1;
 	textureDesc.sampleCount = 1;
 	textureDesc.format = TextureFormat::RGBA8Unorm;
-	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst | TextureUsage::StorageBinding;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::StorageBinding;
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
 
 	heightTexture = device.createTexture(textureDesc);
 
+	
 	TextureViewDescriptor textureViewDesc;
 	textureViewDesc.aspect = TextureAspect::All;
 	textureViewDesc.baseArrayLayer = 0;
@@ -749,10 +765,18 @@ void Application::InitTextures()
 	textureViewDesc.dimension = TextureViewDimension::_2D;
 	textureViewDesc.format = textureDesc.format;
 	heightTextureView = heightTexture.createView(textureViewDesc);
+	
 
-	// fill with noise
-	std::vector<uint8_t> perlin;
-	CreateHeightMap(TEXTURE_SIZE, perlin);
+	textureDesc.format = TextureFormat::RG32Float;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	spectrumTexture = device.createTexture(textureDesc);
+
+	textureViewDesc.format = textureDesc.format;
+	spectrumTextureView = spectrumTexture.createView(textureViewDesc);
+	
+	// fill with spectrum !!! TODO !!!!
+	// std::vector<uint8_t> perlin;
+	// CreateHeightMap(TEXTURE_SIZE, perlin);
 
 	ImageCopyTexture destination;
 	destination.texture = heightTexture;
@@ -765,7 +789,7 @@ void Application::InitTextures()
 	source.bytesPerRow = TEXTURE_SIZE * 4;
 	source.rowsPerImage = TEXTURE_SIZE;
 
-	queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);
+	// queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);
 
 	// Create a sampler
 	SamplerDescriptor samplerDesc;

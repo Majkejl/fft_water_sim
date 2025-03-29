@@ -5,6 +5,7 @@ struct c_Uniforms
 
 @group(0) @binding(0) var<uniform> u: c_Uniforms;
 @group(0) @binding(1) var heightTexture: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var spectrumTexture: texture_2d<f32>;
 
 
 @compute @workgroup_size(32, 32, 1)
@@ -20,3 +21,6 @@ fn cs_main(@builtin(global_invocation_id) id : vec3<u32>) {
     }
     textureStore(heightTexture, vec2i(id.xy), vec4f(height + 0.5));
 }
+// @compute @workgroup_size(1024, 1, 1)
+// fn cs_main(@builtin(global_invocation_id) id : vec3<u32>) {
+// }

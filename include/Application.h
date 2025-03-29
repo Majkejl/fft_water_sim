@@ -69,6 +69,8 @@ class Application
 
 	wgpu::Texture heightTexture;
 	wgpu::TextureView heightTextureView;
+	wgpu::Texture spectrumTexture;
+	wgpu::TextureView spectrumTextureView;
 	wgpu::Sampler sampler;
 
 private:

@@ -3,12 +3,16 @@
 
 #include "Application.h"
 #include "ResourceManager.h"
-#include "PerlinNoise.hpp"
+// #include "PerlinNoise.hpp"
+#include <random>
+#include <cmath>
+
 
 using namespace wgpu;
 
-#define MESH_SIZE 160
-#define TEXTURE_SIZE 320
+#define MESH_SIZE 150
+#define TEXTURE_SIZE 1024
+#define PATCH_SIZE 150
 
 #ifdef __EMSCRIPTEN__
 #define ALIGNMENT 255
@@ -44,26 +48,66 @@ namespace {
 		}
 	}
 
-	void CreateHeightMap(int size, std::vector<uint8_t>& heightMap)
+	// void CreateHeightMap(int size, std::vector<uint8_t>& heightMap)
+	// {
+	// 	heightMap.clear();
+		
+	// 	const siv::PerlinNoise::seed_type seed = { 123456u }; 
+	// 	const siv::PerlinNoise perlin{ seed };
+	// 	const float freq = 8.f / TEXTURE_SIZE;
+
+	// 	for (int i = 0; i < size; i++)
+	// 	{
+	// 		for (int j = 0; j < size; j++) 
+	// 		{
+	// 			heightMap.push_back( static_cast<uint8_t>(255 * perlin.octave2D_01(j * freq, i * freq, 4)) );
+	// 			heightMap.push_back( 0 );
+	// 			heightMap.push_back( 0 );
+	// 			heightMap.push_back( 0 );
+	// 		}
+	// 	}
+	// }
+	
+	double jonswap(double pos_x, double pos_y, double fetch, double wind_x, double wind_y, double enhancment = 3.3)
+	{
+		using std::pow;
+		using std::exp;
+
+		auto freq = std::sqrt(pos_x * pos_x + pos_y * pos_y);
+		auto wind = std::sqrt(wind_x * wind_x + wind_y * wind_y);
+
+		double g = 9.81;
+		double freq_p = 22 * pow( pow(g, 2) / (fetch * wind), 1.0 / 3.0);
+		double alpha = 0.076 * pow( pow(wind, 2) / (fetch * g), 0.22);
+		double sigma = ( freq <= freq_p ) ? 0.07 : 0.09;
+		double r = exp( -pow(freq - freq_p, 2) / ( 2 * pow(sigma * freq_p, 2)));
+
+		double density = alpha * ( pow(g, 2) / pow(freq, 5) ) * exp( -5 * pow(freq_p / freq, 4) / 4) * pow(enhancment, r);
+		
+
+		return density * ((pos_x / freq) * (wind_x / wind) + (pos_y / freq) * (wind_y / wind));
+	}
+
+	void CreateHeightMap(std::vector<float>& heightMap) // TODO add params
 	{
 		heightMap.clear();
+		std::random_device rd{};
+		std::mt19937 gen{rd()};
+		std::normal_distribution d{0., 1.};
+		auto rand_num = [&d, &gen]{ return d(gen); };
 
-		const siv::PerlinNoise::seed_type seed = { 123456u }; 
-		const siv::PerlinNoise perlin{ seed };
-		const float freq = 8.f / TEXTURE_SIZE;
-
-		for (int i = 0; i < size; i++)
+		for (int i = 0; i < TEXTURE_SIZE; i++)
 		{
-			for (int j = 0; j < size; j++) 
+			for (int j = 0; j < TEXTURE_SIZE; j++)
 			{
-				heightMap.push_back( static_cast<uint8_t>(255 * perlin.octave2D_01(j * freq, i * freq, 4)) );
-				heightMap.push_back( 0 );
-				heightMap.push_back( 0 );
-				heightMap.push_back( 0 );
+				auto pos = [&](int x){ return 2 * static_cast<double>(std::_Pi_val) * (static_cast<double>(x) - TEXTURE_SIZE / 2) / PATCH_SIZE; };
+				auto bruh = jonswap(pos(j), pos(i), 5000., 40., 0.);
+				auto amp = (bruh < 0 ? -1 : 1) * std::sqrt(std::abs(bruh)) / std::sqrt(2);
+				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
+				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
 			}
 		}
 	}
-
 }
 
 Application::Application(int w, int h) : width(w), height(h) // TODO : add throws on errors
@@ -775,21 +819,21 @@ void Application::InitTextures()
 	spectrumTextureView = spectrumTexture.createView(textureViewDesc);
 	
 	// fill with spectrum !!! TODO !!!!
-	// std::vector<uint8_t> perlin;
-	// CreateHeightMap(TEXTURE_SIZE, perlin);
+	std::vector<float> spectrum;
+	CreateHeightMap(spectrum);
 
 	ImageCopyTexture destination;
-	destination.texture = heightTexture;
+	destination.texture = spectrumTexture;
 	destination.mipLevel = 0;
 	destination.origin = { 0, 0, 0 };
 	destination.aspect = TextureAspect::All;
 
 	TextureDataLayout source;
 	source.offset = 0;
-	source.bytesPerRow = TEXTURE_SIZE * 4;
+	source.bytesPerRow = TEXTURE_SIZE * 2 * sizeof(float);
 	source.rowsPerImage = TEXTURE_SIZE;
 
-	// queue.writeTexture(destination, perlin.data(), perlin.size(), source, textureDesc.size);
+	queue.writeTexture(destination, spectrum.data(), spectrum.size() * sizeof(float), source, textureDesc.size);
 
 	// Create a sampler
 	SamplerDescriptor samplerDesc;

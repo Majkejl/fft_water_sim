@@ -42,7 +42,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     out.fs_position = (u.model * vec4f(in.position.xyz, 1.0)).xyz;
 	
-	let tex_pos = vec2i((out.fs_position.xy + 1.0) * 159.5);
+	let tex_pos = vec2i((out.fs_position.xy + 1.0) * 511.5);
 	let height = textureLoad(heightTexture, tex_pos, 0).r * 0.2;
 	out.fs_position.z = height;
 

@@ -6,6 +6,7 @@ struct c_Uniforms
 @group(0) @binding(0) var<uniform> u: c_Uniforms;
 @group(0) @binding(1) var heightTexture: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(3) var spectrumTexture: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read> w_buff: array<f32>;
 
 
 @compute @workgroup_size(32, 32, 1)

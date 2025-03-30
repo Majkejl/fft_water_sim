@@ -7,7 +7,6 @@
 #include <random>
 #include <cmath>
 
-
 using namespace wgpu;
 
 #define MESH_SIZE 150
@@ -101,12 +100,18 @@ namespace {
 			for (int j = 0; j < TEXTURE_SIZE; j++)
 			{
 				auto pos = [&](int x){ return 2 * static_cast<double>(std::_Pi_val) * (static_cast<double>(x) - TEXTURE_SIZE / 2) / PATCH_SIZE; };
-				auto bruh = jonswap(pos(j), pos(i), 5000., 40., 0.);
+				auto bruh = jonswap(pos(j), pos(i), 50000., 40., 0.);
 				auto amp = (bruh < 0 ? -1 : 1) * std::sqrt(std::abs(bruh)) / std::sqrt(2);
 				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
 				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
 			}
 		}
+	}
+
+	std::pair<float, float> w_k(int k)
+	{
+		return {static_cast<float>(std::cos(2 * std::_Pi_val / TEXTURE_SIZE * k)),
+					static_cast<float>(-std::sin(2 * std::_Pi_val / TEXTURE_SIZE * k))};
 	}
 }
 
@@ -551,7 +556,7 @@ void Application::InitCompute()
 
 	// Create compute pipeline layout
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
 
 	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
 	uniformBindingLayout.binding = 0;
@@ -571,6 +576,12 @@ void Application::InitCompute()
 	spectrumBindingLayout.visibility = ShaderStage::Compute;
 	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	BindGroupLayoutEntry& wBufferLayout = bindingLayoutEntries[3];
+	wBufferLayout.binding = 4;
+	wBufferLayout.visibility = ShaderStage::Compute;
+	wBufferLayout.buffer.type = BufferBindingType::ReadOnlyStorage;
+	wBufferLayout.buffer.minBindingSize = TEXTURE_SIZE * 2 * sizeof(float);
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -736,6 +747,22 @@ void Application::InitBuffers()
 	uniforms.view = glm::mat4(1.f);
 	uniforms.projection = glm::mat4(1.f);
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+
+	bufferDesc.size = TEXTURE_SIZE * 2 * sizeof(float);
+	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Storage;
+	bufferDesc.mappedAtCreation = false;
+	w_buffer = device.createBuffer(bufferDesc);
+
+	// TODO write buffer
+	std::vector<float> w_n;
+	for (int i = 0; i < TEXTURE_SIZE; i++)
+	{
+		auto w_pair = w_k(i);
+		w_n.emplace_back(w_pair.first);
+		w_n.emplace_back(w_pair.second);
+	}
+
+	queue.writeBuffer(w_buffer, 0, w_n.data(), bufferDesc.size);
 }
 
 void Application::InitBindGroups() 
@@ -776,6 +803,12 @@ void Application::InitBindGroups()
 	bindings.emplace_back();
 	bindings[2].binding = 3;
 	bindings[2].textureView = spectrumTextureView;
+
+	bindings.emplace_back();
+	bindings[3].binding = 4;
+	bindings[3].buffer = w_buffer;
+	bindings[3].offset = 0;
+	bindings[3].size = TEXTURE_SIZE * 2 * sizeof(float);
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;

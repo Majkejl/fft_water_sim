@@ -66,6 +66,7 @@ class Application
 	wgpu::PipelineLayout c_layout;
 	wgpu::BindGroupLayout c_bindGroupLayout;
 
+	wgpu::Buffer w_buffer;
 
 	wgpu::Texture heightTexture;
 	wgpu::TextureView heightTextureView;

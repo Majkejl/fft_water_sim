@@ -6,6 +6,7 @@
 // #include "PerlinNoise.hpp"
 #include <random>
 #include <cmath>
+#include <numbers>
 
 using namespace wgpu;
 
@@ -99,7 +100,7 @@ namespace {
 		{
 			for (int j = 0; j < TEXTURE_SIZE; j++)
 			{
-				auto pos = [&](int x){ return 2 * static_cast<double>(std::_Pi_val) * (static_cast<double>(x) - TEXTURE_SIZE / 2) / PATCH_SIZE; };
+				auto pos = [&](int x){ return 2 * static_cast<double>(std::numbers::pi) * (static_cast<double>(x) - TEXTURE_SIZE / 2) / PATCH_SIZE; };
 				auto bruh = jonswap(pos(j), pos(i), 50000., 40., 0.);
 				auto amp = (bruh < 0 ? -1 : 1) * std::sqrt(std::abs(bruh)) / std::sqrt(2);
 				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
@@ -110,8 +111,8 @@ namespace {
 
 	std::pair<float, float> w_k(int k)
 	{
-		return {static_cast<float>(std::cos(2 * std::_Pi_val / TEXTURE_SIZE * k)),
-					static_cast<float>(-std::sin(2 * std::_Pi_val / TEXTURE_SIZE * k))};
+		return {static_cast<float>(std::cos(2 * std::numbers::pi / TEXTURE_SIZE * k)),
+					static_cast<float>(-std::sin(2 * std::numbers::pi / TEXTURE_SIZE * k))};
 	}
 }
 
@@ -190,11 +191,15 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	InitBindGroups();
 }
 
-Application::~Application()
+Application::~Application() // TODO: tidy up
 {
-	heightTextureView.release();
-	heightTexture.destroy();
-	heightTexture.release();
+	//
+	heightTextureView1.release();
+	heightTextureView2.release();
+	heightTexture1.destroy();
+	heightTexture2.destroy();
+	heightTexture1.release();
+	heightTexture2.release();
 	bindGroup.release();
 	layout.release();
 	bindGroupLayout.release();
@@ -208,6 +213,8 @@ Application::~Application()
 	depthTexture.release();
 	pipeline.release();
 	compPipeline.release();
+	
+	// core elements
 	surface.unconfigure();
 	queue.release();
 	surface.release();
@@ -556,7 +563,7 @@ void Application::InitCompute()
 
 	// Create compute pipeline layout
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(5, Default);
 
 	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
 	uniformBindingLayout.binding = 0;
@@ -564,21 +571,27 @@ void Application::InitCompute()
 	uniformBindingLayout.buffer.type = BufferBindingType::Uniform;
 	uniformBindingLayout.buffer.minBindingSize = sizeof(c_Uniforms);
 
-	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
-	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Compute;
-	textureBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
-	textureBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
-	textureBindingLayout.storageTexture.format = TextureFormat::RGBA8Unorm;
+	BindGroupLayoutEntry& textureOutBindingLayout = bindingLayoutEntries[1];
+	textureOutBindingLayout.binding = 1;
+	textureOutBindingLayout.visibility = ShaderStage::Compute;
+	textureOutBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
+	textureOutBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
+	textureOutBindingLayout.storageTexture.format = TextureFormat::RGBA8Unorm;
 
-	BindGroupLayoutEntry& spectrumBindingLayout = bindingLayoutEntries[2];
-	spectrumBindingLayout.binding = 3;
+	BindGroupLayoutEntry& textureInBindingLayout = bindingLayoutEntries[2];
+	textureInBindingLayout.binding = 3;
+	textureInBindingLayout.visibility = ShaderStage::Compute;
+	textureInBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	textureInBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	BindGroupLayoutEntry& spectrumBindingLayout = bindingLayoutEntries[3];
+	spectrumBindingLayout.binding = 4;
 	spectrumBindingLayout.visibility = ShaderStage::Compute;
 	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
-	BindGroupLayoutEntry& wBufferLayout = bindingLayoutEntries[3];
-	wBufferLayout.binding = 4;
+	BindGroupLayoutEntry& wBufferLayout = bindingLayoutEntries[4];
+	wBufferLayout.binding = 5;
 	wBufferLayout.visibility = ShaderStage::Compute;
 	wBufferLayout.buffer.type = BufferBindingType::ReadOnlyStorage;
 	wBufferLayout.buffer.minBindingSize = TEXTURE_SIZE * 2 * sizeof(float);
@@ -659,7 +672,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.maxVertexBufferArrayStride = 3 * sizeof(float);
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
-	requiredLimits.limits.maxInterStageShaderComponents = 6;
+	//requiredLimits.limits.maxInterStageShaderComponents = 6;
 
 	// We use at most 1 bind group for now
 	requiredLimits.limits.maxBindGroups = 1;
@@ -674,7 +687,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.maxTextureArrayLayers = 1;
 
 	// Add the possibility to sample a texture in a shader
-	requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+	requiredLimits.limits.maxSampledTexturesPerShaderStage = 2;
 
 	requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
@@ -775,7 +788,7 @@ void Application::InitBindGroups()
 	bindings[0].size = sizeof(MyUniforms);
 
 	bindings[1].binding = 1;
-	bindings[1].textureView = heightTextureView;
+	bindings[1].textureView = heightTextureView1;
 
 	bindings[2].binding = 2;
 	bindings[2].sampler = sampler;
@@ -798,17 +811,21 @@ void Application::InitBindGroups()
 	
 	bindings.emplace_back();
 	bindings[1].binding = 1;
-	bindings[1].textureView = heightTextureView;
-
+	bindings[1].textureView = heightTextureView1;
+	
 	bindings.emplace_back();
 	bindings[2].binding = 3;
-	bindings[2].textureView = spectrumTextureView;
-
+	bindings[2].textureView = heightTextureView2;
+	
 	bindings.emplace_back();
 	bindings[3].binding = 4;
-	bindings[3].buffer = w_buffer;
-	bindings[3].offset = 0;
-	bindings[3].size = TEXTURE_SIZE * 2 * sizeof(float);
+	bindings[3].textureView = spectrumTextureView;
+	
+	bindings.emplace_back();
+	bindings[4].binding = 5;
+	bindings[4].buffer = w_buffer;
+	bindings[4].offset = 0;
+	bindings[4].size = TEXTURE_SIZE * 2 * sizeof(float);
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;
@@ -830,7 +847,8 @@ void Application::InitTextures()
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
 
-	heightTexture = device.createTexture(textureDesc);
+	heightTexture1 = device.createTexture(textureDesc);
+	heightTexture2 = device.createTexture(textureDesc);
 
 	
 	TextureViewDescriptor textureViewDesc;
@@ -841,7 +859,8 @@ void Application::InitTextures()
 	textureViewDesc.mipLevelCount = 1;
 	textureViewDesc.dimension = TextureViewDimension::_2D;
 	textureViewDesc.format = textureDesc.format;
-	heightTextureView = heightTexture.createView(textureViewDesc);
+	heightTextureView1 = heightTexture1.createView(textureViewDesc);
+	heightTextureView2 = heightTexture2.createView(textureViewDesc);
 	
 
 	textureDesc.format = TextureFormat::RG32Float;
@@ -851,7 +870,6 @@ void Application::InitTextures()
 	textureViewDesc.format = textureDesc.format;
 	spectrumTextureView = spectrumTexture.createView(textureViewDesc);
 	
-	// fill with spectrum !!! TODO !!!!
 	std::vector<float> spectrum;
 	CreateHeightMap(spectrum);
 

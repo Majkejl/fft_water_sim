@@ -32,7 +32,10 @@ struct MyUniforms  // TODO: split perhaps into separate structs
 
 struct c_Uniforms
 {
-	float time; float _pad[3];
+	float time; 
+	unsigned stage;
+	unsigned N;
+	float _pad;
 };
 
 class Application
@@ -51,13 +54,25 @@ class Application
 	wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
 	wgpu::TextureView depthTextureView;
 	wgpu::Texture  depthTexture;
+
+	// pipelines
 	wgpu::RenderPipeline pipeline;
-	wgpu::ComputePipeline compPipeline;
+	wgpu::ComputePipeline compPipeline; // TODO: remove when possible
+	wgpu::ComputePipeline precompute_pipe;
+	wgpu::ComputePipeline fft_horizontal_pipe;
+	wgpu::ComputePipeline fft_vertical_pipe;
+
+	// buffers
 	wgpu::Buffer pointBuffer;
 	wgpu::Buffer indexBuffer;
 	wgpu::Buffer uniformBuffer;
+	wgpu::Buffer w_buffer;
+
+	// idk lol
 	uint32_t indexCount;
 	uint32_t vertexCount;
+
+	// bindings
 	wgpu::BindGroup bindGroup;
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;
@@ -66,12 +81,15 @@ class Application
 	wgpu::PipelineLayout c_layout;
 	wgpu::BindGroupLayout c_bindGroupLayout;
 
-	wgpu::Buffer w_buffer;
-
-	wgpu::Texture heightTexture;
-	wgpu::TextureView heightTextureView;
+	// textures
+	wgpu::Texture heightTexture1;
+	wgpu::TextureView heightTextureView1;
+	wgpu::Texture heightTexture2;
+	wgpu::TextureView heightTextureView2;
 	wgpu::Texture spectrumTexture;
 	wgpu::TextureView spectrumTextureView;
+	wgpu::Texture foamTexture;
+	wgpu::TextureView foamTextureView;
 	wgpu::Sampler sampler;
 
 private:

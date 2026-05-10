@@ -68,6 +68,7 @@ class Application
 	wgpu::Buffer indexBuffer;
 	wgpu::Buffer uniformBuffer;
 	wgpu::Buffer w_buffer;
+	// wgpu::Buffer bit_reverse_buffer;
 
 	// idk lol
 	uint32_t indexCount;
@@ -94,6 +95,7 @@ class Application
 	wgpu::TextureView spectrumTextureView;
 	wgpu::Texture foamTexture;
 	wgpu::TextureView foamTextureView;
+
 	wgpu::Sampler sampler;
 
 private:

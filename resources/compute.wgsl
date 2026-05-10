@@ -10,6 +10,7 @@ struct c_Uniforms
 @group(0) @binding(3) var inTexture: texture_2d<f32>;
 @group(0) @binding(4) var spectrumTexture: texture_2d<f32>;
 @group(0) @binding(5) var<storage, read> w_buff: array<f32>;
+@group(0) @binding(6) var kDataTexture: texture_2d<f32>;
 
 
 // @compute @workgroup_size(32, 32, 1)
@@ -40,7 +41,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let value = textureLoad(spectrumTexture, coord, 0);
 
-    textureStore(outTexture, coord, value);
+    textureStore(outTexture, coord, vec4(u.time / 100));
 }
 
 const G: f32 = 9.81;
@@ -72,17 +73,16 @@ fn timeSpectrum(@builtin(global_invocation_id) id : vec3<u32>) {
     // 2. Reconstruct k vector
     //    (assuming centered spectrum)
     // -----------------------------
-    let halfN = f32(N) * 0.5;
 
-    let kx = (f32(coord.x) - halfN);
-    let ky = (f32(coord.y) - halfN);
+    let kx = textureLoad(kDataTexture, coord, 0).r;
+    let ky = textureLoad(kDataTexture, coord, 0).g;
 
     let k = length(vec2<f32>(kx, ky));
 
     // -----------------------------
     // 3. Dispersion relation
     // -----------------------------
-    let omega = sqrt(G * k);
+    let omega = textureLoad(kDataTexture, coord, 0).b;
 
     let t = u.time;
 
@@ -166,17 +166,17 @@ fn fft_vertical(@builtin(global_invocation_id) id : vec3<u32>) {
     let x_b = b_i / N;
     let y_b = b_i % N;
 
-    let a = textureLoad(inTexture, vec2<u32>(x_a, y_a), 0).r;
-    let b = textureLoad(inTexture, vec2<u32>(x_b, y_b), 0).r;
+    let a = textureLoad(inTexture, vec2<u32>(x_a, y_a), 0).rg;
+    let b = textureLoad(inTexture, vec2<u32>(x_b, y_b), 0).rg;
 
-    // twiddle factor
+    // twiddle factor W_N^k
     let tw = w((pos % halfSpan) * (N / (2u * halfSpan)));
 
-    let b_tw = b * tw.x; // simplified real FFT form (same assumption as horizontal)
+    let b_tw = complex_mul(b, tw);
 
     let out_a = a + b_tw;
     let out_b = a - b_tw;
 
-    textureStore(outTexture, vec2(x_a, y_a), vec4f(out_a));
-    textureStore(outTexture, vec2(x_b, y_b), vec4f(out_b));
+    textureStore(outTexture, vec2(x_a, y_a), vec4f(out_a, 0.0, 1.0));
+    textureStore(outTexture, vec2(x_b, y_b), vec4f(out_b, 0.0, 1.0));
 }

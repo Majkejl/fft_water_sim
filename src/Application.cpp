@@ -289,6 +289,7 @@ void Application::MainLoop()
 	glfwPollEvents();
 
 	c_uniforms.time = static_cast<float>(glfwGetTime());
+	c_uniforms.N = TEXTURE_SIZE;
 	queue.writeBuffer(uniformBuffer, (sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT, &c_uniforms, sizeof(c_Uniforms));
 	RunCompute();
 
@@ -628,7 +629,7 @@ void Application::InitCompute()
 
 	// Create compute pipeline layout
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(5, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(6, Default);
 
 	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
 	uniformBindingLayout.binding = 0;
@@ -659,7 +660,14 @@ void Application::InitCompute()
 	wBufferLayout.binding = 5;
 	wBufferLayout.visibility = ShaderStage::Compute;
 	wBufferLayout.buffer.type = BufferBindingType::ReadOnlyStorage;
-	wBufferLayout.buffer.minBindingSize = TEXTURE_SIZE * 2 * sizeof(float);
+	wBufferLayout.buffer.minBindingSize = TEXTURE_SIZE * sizeof(float);
+
+	BindGroupLayoutEntry& kDataBindingLayout = bindingLayoutEntries[5];
+	kDataBindingLayout.binding = 6;
+	kDataBindingLayout.visibility = ShaderStage::Compute;
+	kDataBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	kDataBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -674,7 +682,7 @@ void Application::InitCompute()
 
 	// Create compute pipeline
 	ComputePipelineDescriptor computePipelineDesc;
-	computePipelineDesc.compute.constantCount = 1;
+	computePipelineDesc.compute.constantCount = 0;
 	computePipelineDesc.compute.constants = nullptr;
 	computePipelineDesc.compute.entryPoint = "cs_main";
 	computePipelineDesc.compute.module = computeShaderModule;
@@ -698,18 +706,17 @@ void Application::InitCompute()
 void Application::RunCompute() 
 {
     // Initialize a command encoder
-    Queue compQueue = device.getQueue(); 
     CommandEncoderDescriptor encoderDesc = Default;
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
-    // Create and use compute pass here!
+	// Create and use compute pass here!
 	// Create compute pass
 	ComputePassDescriptor computePassDesc;
 	computePassDesc.timestampWrites = nullptr;
 	ComputePassEncoder computePass = encoder.beginComputePass(computePassDesc);
 
 	// Use compute pass
-	computePass.setPipeline(compPipeline);
+	computePass.setPipeline(time_spectrum_pipe);
 	computePass.setBindGroup(0, c_bindGroup1, 0, nullptr);
 	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
 
@@ -724,7 +731,7 @@ void Application::RunCompute()
 
     // Encode and submit the GPU commands
     CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
-    compQueue.submit(commands);
+    queue.submit(commands);
 
     // Clean up
 #ifndef WEBGPU_BACKEND_WGPU
@@ -764,7 +771,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	requiredLimits.limits.maxTextureArrayLayers = 1;
 
 	// Add the possibility to sample a texture in a shader
-	requiredLimits.limits.maxSampledTexturesPerShaderStage = 2;
+	requiredLimits.limits.maxSampledTexturesPerShaderStage = 4;
 
 	requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
@@ -838,30 +845,26 @@ void Application::InitBuffers()
 	uniforms.projection = glm::mat4(1.f);
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
-	int stages = (int)std::log2(TEXTURE_SIZE);
-	bufferDesc.size = TEXTURE_SIZE * stages * sizeof(float);
+	// Flat W_N^k table: w[k] = e^{-2πik/N} for k = 0..N/2-1
+	bufferDesc.size = TEXTURE_SIZE * sizeof(float); // N/2 complex pairs = N floats
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Storage;
 	bufferDesc.mappedAtCreation = false;
 	w_buffer = device.createBuffer(bufferDesc);
 
-	std::vector<float> w_n(TEXTURE_SIZE * stages);
-	for (int stage = 0; stage < stages; stage++) {
-
-		int span = 1 << (stage + 1);
-		int half = span >> 1;
-
-		for (int j = 0; j < TEXTURE_SIZE/2; j++) {
-
-			float angle = -2.0f * static_cast<float>(std::numbers::pi) * (j % half) / span;
-
-			int i = j + stage * (TEXTURE_SIZE/2);
-
-			w_n[2*i + 0] = cos(angle);
-			w_n[2*i + 1] = sin(angle);
-		}
+	std::vector<float> w_n(TEXTURE_SIZE); // N floats = N/2 complex pairs
+	for (int k = 0; k < TEXTURE_SIZE / 2; k++) {
+		float angle = -2.0f * static_cast<float>(std::numbers::pi) * k / TEXTURE_SIZE;
+		w_n[2*k + 0] = std::cos(angle);
+		w_n[2*k + 1] = std::sin(angle);
 	}
 
 	queue.writeBuffer(w_buffer, 0, w_n.data(), bufferDesc.size);
+
+	// bufferDesc.size = TEXTURE_SIZE * sizeof(unsigned);
+	// bit_reverse_buffer = device.createBuffer(bufferDesc);
+
+	// std::vector<unsigned> bits(TEXTURE_SIZE);
+
 }
 
 void Application::InitBindGroups() 
@@ -911,7 +914,11 @@ void Application::InitBindGroups()
 	bindings[4].binding = 5;
 	bindings[4].buffer = w_buffer;
 	bindings[4].offset = 0;
-	bindings[4].size = TEXTURE_SIZE * (int)std::log2(TEXTURE_SIZE) * sizeof(float);
+	bindings[4].size = TEXTURE_SIZE * sizeof(float);
+
+	bindings.emplace_back();
+	bindings[5].binding = 6;
+	bindings[5].textureView = kDataTextureView;
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;
@@ -984,6 +991,10 @@ void Application::InitTextures()
 	source.rowsPerImage = TEXTURE_SIZE;
 
 	queue.writeTexture(destination, spectrum.data(), spectrum.size() * sizeof(float), source, textureDesc.size);
+
+	destination.texture = kDataTexture;
+	source.bytesPerRow = TEXTURE_SIZE * 4 * sizeof(float);
+	queue.writeTexture(destination, k_data.data(), k_data.size() * sizeof(float), source, textureDesc.size);
 
 
 	// Create a sampler

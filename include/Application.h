@@ -1,145 +1,158 @@
 #pragma once
 
-// #include <webgpu/webgpu.h>
 #include "webgpu/webgpu.hpp"
 #include "webgpu-utils.h"
+#include "Camera.h"
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
-#include <cassert>
 #include <string>
 #include <vector>
 
 #ifdef __EMSCRIPTEN__
 #  include <emscripten.h>
-#endif // __EMSCRIPTEN__
+#endif
 
 #ifdef WEBGPU_BACKEND_WGPU
 #  include <webgpu/wgpu.h>
-#endif // WEBGPU_BACKEND_WGPU
+#endif
 
 
-struct MyUniforms  // TODO: split perhaps into separate structs
-{
-	glm::mat4 model;
-	glm::mat4 view;
-	glm::mat4 projection;
-	glm::vec3 eye_pos; float _pad1;
-
-	// TODO: add light maybe?
+/* Render-side uniforms uploaded to the GPU each frame.
+   Layout must exactly match the MyUniforms struct in water.wgsl and skybox.wgsl. */
+struct MyUniforms {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::vec3 eye_pos; float _pad1;
 };
 
-struct c_Uniforms
-{
-	float time; 
-	unsigned stage;
-	unsigned N;
-	float _pad;
+/* Per-dispatch compute uniforms written into the dynamic-offset uniform buffer.
+   Layout must exactly match c_Uniforms in fft.wgsl and time_spectrum.wgsl. */
+struct ComputeUniforms {
+    float    time;
+    uint32_t stage;
+    uint32_t N;
+    float    _pad;
 };
 
+
+/* Top-level application class.
+   Owns the WebGPU device, all GPU resources, and drives the main render/compute loop. */
 class Application
 {
-	// Uniforms
-	MyUniforms uniforms;
-	c_Uniforms c_uniforms;
+    // --- CPU-side render uniforms ---
+    MyUniforms uniforms;
 
-	// No touchy here
-	uint32_t width, height;
-    GLFWwindow *window;
-	wgpu::Device device;
-	wgpu::Queue queue;
-	wgpu::Surface surface;
-	std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
-	wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
-	wgpu::TextureView depthTextureView;
-	wgpu::Texture  depthTexture;
+    // --- window / WebGPU core ---
+    uint32_t    width, height;
+    GLFWwindow* window;
+    wgpu::Device  device;
+    wgpu::Queue   queue;
+    wgpu::Surface surface;
+    std::unique_ptr<wgpu::ErrorCallback> error_callback;
+    wgpu::TextureFormat surface_format = wgpu::TextureFormat::Undefined;
 
-	// pipelines
-	wgpu::RenderPipeline pipeline;
-	wgpu::RenderPipeline skyboxPipeline;
-	wgpu::ComputePipeline compPipeline; // TODO: remove when possible
-	wgpu::ComputePipeline precompute_pipe;
-	wgpu::ComputePipeline time_spectrum_pipe;
-	wgpu::ComputePipeline fft_horizontal_pipe;
-	wgpu::ComputePipeline fft_vertical_pipe;
+    // --- depth buffer ---
+    wgpu::Texture     depth_texture;
+    wgpu::TextureView depth_texture_view;
 
-	// buffers
-	wgpu::Buffer pointBuffer;
-	wgpu::Buffer indexBuffer;
-	wgpu::Buffer uniformBuffer;
-	wgpu::Buffer c_uniformBuffer;
-	uint32_t c_uniformStride;
+    // --- render pipelines ---
+    wgpu::RenderPipeline pipeline;         /* water surface */
+    wgpu::RenderPipeline skybox_pipeline;  /* fullscreen skybox */
 
-	// idk lol
-	uint32_t indexCount;
-	uint32_t vertexCount;
+    // --- compute pipelines ---
+    wgpu::ComputePipeline time_spectrum_pipeline; /* h0(k) → h(k,t) + slope spectra */
+    wgpu::ComputePipeline fft_h_pipeline;         /* row-wise IFFT stage */
+    wgpu::ComputePipeline fft_v_pipeline;         /* column-wise IFFT stage */
 
-	// bindings
-	wgpu::BindGroup bindGroup;
-	wgpu::PipelineLayout layout;
-	wgpu::BindGroupLayout bindGroupLayout;
-	
-	wgpu::BindGroup c_bindGroup1;
-	wgpu::BindGroup c_bindGroup2;
-	wgpu::PipelineLayout c_layout;
-	wgpu::BindGroupLayout c_bindGroupLayout;
+    // --- geometry buffers ---
+    wgpu::Buffer vertex_buffer;
+    wgpu::Buffer index_buffer;
+    uint32_t     index_count;
 
-	// textures
-	wgpu::Texture kDataTexture;
-	wgpu::TextureView kDataTextureView;
-	wgpu::Texture heightTexture1;
-	wgpu::TextureView heightTextureView1;
-	wgpu::Texture heightTexture2;
-	wgpu::TextureView heightTextureView2;
-	wgpu::Texture spectrumTexture;
-	wgpu::TextureView spectrumTextureView;
-	wgpu::Texture butterflyTexture;
-	wgpu::TextureView butterflyTextureView;
-	wgpu::Texture foamTexture;
-	wgpu::TextureView foamTextureView;
+    // --- uniform buffers ---
+    wgpu::Buffer uniform_buffer;          /* render-side MyUniforms */
+    wgpu::Buffer compute_uniform_buffer;  /* ComputeUniforms × TEXTURE_LOG slots */
+    uint32_t     compute_uniform_stride;  /* 256-byte aligned stride for dynamic offsets */
 
-	wgpu::Texture cubemapTexture;
-	wgpu::TextureView cubemapTextureView;
-	std::vector<std::string> cubemapPaths;
-	int currentCubemapIndex = 0;
+    // --- render-side bind group ---
+    wgpu::BindGroup       bind_group;
+    wgpu::PipelineLayout  pipeline_layout;
+    wgpu::BindGroupLayout bind_group_layout;
 
-	wgpu::Sampler sampler;
+    // --- time_spectrum compute bind group (one per frame, no ping-pong) ---
+    wgpu::BindGroup        time_spectrum_bind_group;
+    wgpu::BindGroupLayout  time_spectrum_bgl;
+    wgpu::PipelineLayout   time_spectrum_layout;
 
-	// Orbit camera (Z-up, always looking at origin)
-	float cam_theta  = 0.8f;   // azimuth angle (radians)
-	float cam_phi    = 0.4f;   // elevation angle (radians)
-	float cam_radius = 3.0f;   // distance from origin
+    // --- FFT compute bind groups (ping-pong pairs for height, slope_x, slope_y) ---
+    /* [0]: out=tex[0], in=tex[1]   [1]: out=tex[1], in=tex[0] */
+    wgpu::BindGroup       h_fft_bind_groups[2];
+    wgpu::BindGroup       sx_fft_bind_groups[2];
+    wgpu::BindGroup       sy_fft_bind_groups[2];
+    wgpu::BindGroupLayout fft_bgl;
+    wgpu::PipelineLayout  fft_layout;
 
-	// Mouse tracking
-	bool   mouse_dragging = false;
-	double last_mouse_x   = 0.0;
-	double last_mouse_y   = 0.0;
+    // --- ocean simulation textures ---
+    wgpu::Texture     height_textures[2];      /* ping-pong IFFT targets (RGBA32Float) */
+    wgpu::TextureView height_texture_views[2];
+    wgpu::Texture     slope_x_textures[2];     /* ping-pong for ∂h/∂x IFFT (RGBA32Float) */
+    wgpu::TextureView slope_x_texture_views[2];
+    wgpu::Texture     slope_y_textures[2];     /* ping-pong for ∂h/∂y IFFT (RGBA32Float) */
+    wgpu::TextureView slope_y_texture_views[2];
+    wgpu::Texture     spectrum_texture;         /* initial h0(k) spectrum (RG32Float) */
+    wgpu::TextureView spectrum_texture_view;
+    wgpu::Texture     butterfly_texture;        /* precomputed DIT butterfly table */
+    wgpu::TextureView butterfly_texture_view;
+    wgpu::Texture     k_data_texture;           /* wave-vector kx/ky and dispersion omega */
+    wgpu::TextureView k_data_texture_view;
+
+    // --- environment / skybox ---
+    wgpu::Texture     cubemap_texture;
+    wgpu::TextureView cubemap_texture_view;
+    std::vector<std::string> cubemap_paths; /* sorted list of PNG paths found at startup */
+    int cubemap_index = 0;
+
+    // --- shared sampler ---
+    wgpu::Sampler sampler;
+
+    // --- orbit camera ---
+    Camera camera;
+    bool   mouse_dragging = false;
+    double last_mouse_x   = 0.0;
+    double last_mouse_y   = 0.0;
 
 private:
-    wgpu::TextureView GetNextSurfaceTextureView();
-    wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+    wgpu::TextureView    get_next_surface_view();
+    wgpu::RequiredLimits get_required_limits(wgpu::Adapter adapter) const;
 
-	static void OnMouseButton(GLFWwindow* w, int button, int action, int mods);
-	static void OnCursorPos(GLFWwindow* w, double x, double y);
-	static void OnScroll(GLFWwindow* w, double dx, double dy);
-	void InitCompute();
-    void InitPipeline();
-    void InitBuffers();
-	void InitBindGroups();
-	void InitTextures();
-	void InitCubemap();
-	void RebuildRenderBindGroup();
+    void init_pipeline();
+    void init_compute();
+    void init_buffers();
+    void init_bind_groups();
+    void init_textures();
+    void init_cubemap();
+    void rebuild_render_bind_group();
+    void run_compute();
+
+    /* GLFW input callbacks — registered in the constructor via glfwSetWindowUserPointer. */
+    static void on_mouse_button(GLFWwindow* w, int button, int action, int mods);
+    static void on_cursor_pos(GLFWwindow* w, double x, double y);
+    static void on_scroll(GLFWwindow* w, double dx, double dy);
+
 public:
     Application(int width, int height);
     ~Application();
 
-    void MainLoop();
-	void RunCompute();
-	void LoadCubemap(int index);
+    /* Executes one frame: compute IFFT pass → render pass → present. */
+    void main_loop();
 
-    bool IsRunning();
+    /* Loads the cubemap at the given index from the sorted list discovered at startup. */
+    void load_cubemap(int index);
 
-
+    /* Returns false when the OS window-close event has been received. */
+    bool is_running();
 };

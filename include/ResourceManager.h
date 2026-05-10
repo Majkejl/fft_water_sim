@@ -5,26 +5,21 @@
 #include <filesystem>
 #include <webgpu/webgpu.hpp>
 
+/* Static utility class for loading files and GPU resources from disk. */
 class ResourceManager {
 public:
-	static bool loadGeometry(
-		const std::filesystem::path& path,
-		std::vector<float>& pointData,
-		std::vector<uint16_t>& indexData
-	);
+    /* Loads a WGSL source file and compiles it into a shader module on the given device.
+       Returns nullptr on failure (file not found or compilation error). */
+    static wgpu::ShaderModule load_shader_module(
+        const std::filesystem::path& path,
+        wgpu::Device device);
 
-	static wgpu::ShaderModule loadShaderModule(
-		const std::filesystem::path& path,
-		wgpu::Device device
-	);
-
-	// Loads a cubemap from a horizontal-cross PNG.
-	// Fills facePixels with 6 consecutive faceSize×faceSize RGBA8 images in
-	// WebGPU layer order: +X, -X, +Y, -Y, +Z, -Z.
-	// Returns false and leaves facePixels unchanged on failure.
-	static bool loadCubemapCross(
-		const std::filesystem::path& path,
-		std::vector<uint8_t>& facePixels,
-		int& faceSize
-	);
+    /* Loads a horizontal-cross cubemap PNG and extracts the six faces into facePixels.
+       Faces are ordered in WebGPU layer order: +X(0), -X(1), +Y(2), -Y(3), +Z(4), -Z(5).
+       The direction-to-face mapping for Z-up worlds is handled in the shaders.
+       Returns false and leaves facePixels unchanged on failure. */
+    static bool load_cubemap_cross(
+        const std::filesystem::path& path,
+        std::vector<uint8_t>&        face_pixels,
+        int&                         face_size);
 };

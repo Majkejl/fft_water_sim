@@ -1,4 +1,3 @@
-// In ResourceManager.cpp
 #include "ResourceManager.h"
 
 #include <fstream>
@@ -24,123 +23,64 @@
 
 using namespace wgpu;
 
-bool ResourceManager::loadGeometry(
-	const std::filesystem::path& path,
-	std::vector<float>& pointData,
-	std::vector<uint16_t>& indexData
-) {
-	std::ifstream file(path);
-	if (!file.is_open()) {
-		return false;
-	}
-
-	pointData.clear();
-	indexData.clear();
-
-	enum class Section {
-		None,
-		Points,
-		Indices,
-	};
-	Section currentSection = Section::None;
-
-	float value;
-	uint16_t index;
-	std::string line;
-	while (!file.eof()) {
-		getline(file, line);
-
-		// overcome the `CRLF` problem
-		if (!line.empty() && line.back() == '\r') {
-			line.pop_back();
-		}
-
-		if (line == "[points]") {
-			currentSection = Section::Points;
-		}
-		else if (line == "[indices]") {
-			currentSection = Section::Indices;
-		}
-		else if (line[0] == '#' || line.empty()) {
-			// Do nothing, this is a comment
-		}
-		else if (currentSection == Section::Points) {
-			std::istringstream iss(line);
-			// Get x, y, r, g, b
-			for (int i = 0; i < 5; ++i) {
-				iss >> value;
-				pointData.push_back(value);
-			}
-		}
-		else if (currentSection == Section::Indices) {
-			std::istringstream iss(line);
-			// Get corners #0 #1 and #2
-			for (int i = 0; i < 3; ++i) {
-				iss >> index;
-				indexData.push_back(index);
-			}
-		}
-	}
-	return true;
-}
-
-ShaderModule ResourceManager::loadShaderModule(const std::filesystem::path& path, Device device) {
-	std::ifstream file(path);
-	if (!file.is_open()) {
-		return nullptr;
-	}
-	file.seekg(0, std::ios::end);
-	size_t size = file.tellg();
-	std::string shaderSource(size, ' ');
-	file.seekg(0);
-	file.read(shaderSource.data(), size);
-
-	ShaderModuleWGSLDescriptor shaderCodeDesc{};
-	shaderCodeDesc.chain.next = nullptr;
-	shaderCodeDesc.chain.sType = SType::ShaderModuleWGSLDescriptor;
-	shaderCodeDesc.code = shaderSource.c_str();
-
-	ShaderModuleDescriptor shaderDesc{};
-#ifdef WEBGPU_BACKEND_WGPU
-	shaderDesc.hintCount = 0;
-	shaderDesc.hints = nullptr;
-#endif
-	shaderDesc.nextInChain = &shaderCodeDesc.chain;
-	return device.createShaderModule(shaderDesc);
-}
-
-bool ResourceManager::loadCubemapCross(
-	const std::filesystem::path& path,
-	std::vector<uint8_t>& facePixels,
-	int& faceSize)
+wgpu::ShaderModule ResourceManager::load_shader_module(
+    const std::filesystem::path& path, Device device)
 {
-	int w, h, ch;
-	stbi_uc* img = stbi_load(path.string().c_str(), &w, &h, &ch, 4);
-	if (!img) return false;
+    std::ifstream file(path);
+    if (!file.is_open()) return nullptr;
 
-	// Horizontal cross layout: 4 columns × 3 rows, square image padded to w×w.
-	//        [ +Y ]
-	//  [-X] [+Z] [+X] [-Z]
-	//        [ -Y ]
-	faceSize = w / 4;
-	const int yPad = (h - 3 * faceSize) / 2;
+    file.seekg(0, std::ios::end);
+    size_t size = file.tellg();
+    std::string source(size, ' ');
+    file.seekg(0);
+    file.read(source.data(), size);
 
-	// WebGPU cubemap layer order: +X(0), -X(1), +Y(2), -Y(3), +Z(4), -Z(5)
-	// Standard Y-up cross assignment; Z-up→Y-up remapping is done in the shaders.
-	const int faceX[6] = { 2*faceSize, 0,       faceSize,          faceSize,          faceSize,  3*faceSize };
-	const int faceY[6] = { yPad+faceSize, yPad+faceSize, yPad, yPad+2*faceSize, yPad+faceSize, yPad+faceSize };
+    ShaderModuleWGSLDescriptor wgsl_desc{};
+    wgsl_desc.chain.next  = nullptr;
+    wgsl_desc.chain.sType = SType::ShaderModuleWGSLDescriptor;
+    wgsl_desc.code        = source.c_str();
 
-	const int bytesPerFace = faceSize * faceSize * 4;
-	facePixels.resize(6 * bytesPerFace);
+    ShaderModuleDescriptor desc{};
+#ifdef WEBGPU_BACKEND_WGPU
+    desc.hintCount = 0;
+    desc.hints     = nullptr;
+#endif
+    desc.nextInChain = &wgsl_desc.chain;
+    return device.createShaderModule(desc);
+}
 
-	for (int face = 0; face < 6; face++) {
-		uint8_t* dst = facePixels.data() + face * bytesPerFace;
-		for (int row = 0; row < faceSize; row++) {
-			const stbi_uc* src = img + ((faceY[face] + row) * w + faceX[face]) * 4;
-			std::memcpy(dst + row * faceSize * 4, src, static_cast<size_t>(faceSize) * 4);
-		}
-	}
+bool ResourceManager::load_cubemap_cross(
+    const std::filesystem::path& path,
+    std::vector<uint8_t>&        face_pixels,
+    int&                         face_size)
+{
+    int w, h, ch;
+    stbi_uc* img = stbi_load(path.string().c_str(), &w, &h, &ch, 4);
+    if (!img) return false;
 
-	stbi_image_free(img);
-	return true;
+    // Horizontal cross layout: 4 columns × 3 rows.
+    //        [ +Y ]
+    //  [-X] [+Z] [+X] [-Z]
+    //        [ -Y ]
+    face_size      = w / 4;
+    const int yPad = (h - 3 * face_size) / 2;
+
+    // WebGPU layer order: +X(0), -X(1), +Y(2), -Y(3), +Z(4), -Z(5).
+    // Direction-to-face remapping for Z-up worlds is done in the shaders.
+    const int face_x[6] = { 2*face_size, 0,          face_size,          face_size,          face_size,  3*face_size };
+    const int face_y[6] = { yPad+face_size, yPad+face_size, yPad, yPad+2*face_size, yPad+face_size, yPad+face_size };
+
+    const int bytes_per_face = face_size * face_size * 4;
+    face_pixels.resize(6 * bytes_per_face);
+
+    for (int face = 0; face < 6; face++) {
+        uint8_t* dst = face_pixels.data() + face * bytes_per_face;
+        for (int row = 0; row < face_size; row++) {
+            const stbi_uc* src = img + ((face_y[face] + row) * w + face_x[face]) * 4;
+            std::memcpy(dst + row * face_size * 4, src, static_cast<size_t>(face_size) * 4);
+        }
+    }
+
+    stbi_image_free(img);
+    return true;
 }

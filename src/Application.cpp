@@ -3,7 +3,8 @@
 
 #include "Application.h"
 #include "ResourceManager.h"
-// #include "PerlinNoise.hpp"
+#include "Pipelines.h"
+#include "Textures.h"
 #include <algorithm>
 #include <random>
 #include <cmath>
@@ -12,1201 +13,1047 @@
 #include <filesystem>
 
 using namespace wgpu;
+using namespace pipeline_helpers;
+using namespace texture_helpers;
 
-#define MESH_SIZE 150
-#define TEXTURE_SIZE 256
-#define TEXTURE_LOG 8
-#define PATCH_SIZE 150
+static constexpr uint32_t   MESH_SIZE    = 150;
+static constexpr uint32_t   TEXTURE_SIZE = 256;
+static constexpr uint32_t   TEXTURE_LOG  = 8;
+static constexpr float PATCH_SIZE   = 150.f;
 
-#ifdef __EMSCRIPTEN__
-#define ALIGNMENT 255
-#else
-#define ALIGNMENT 31
-#endif
-
-// Creator funcs
+// ---------------------------------------------------------------------------
+// Internal helpers (ocean data generation)
+// ---------------------------------------------------------------------------
 namespace {
-	void CreateGeometry(int size, std::vector<float>& pointData, std::vector<uint16_t>& indexData)
-	{
-		pointData.clear();
-		indexData.clear();
 
-		for (int i = 0; i < size; i++)
-		{
-			for (int j = 0; j < size; j++)
-			{
-				pointData.push_back(static_cast<float>(j) / (size - 1)); // x
-				pointData.push_back(static_cast<float>(i) / (size - 1)); // y
-				pointData.push_back(0.f);		   				         // z
+void create_geometry(int size, std::vector<float>& vertices, std::vector<uint16_t>& indices)
+{
+    vertices.clear();
+    indices.clear();
 
-				pointData.push_back(static_cast<float>(j) / (size - 1)); // u
-				pointData.push_back(static_cast<float>(i) / (size - 1)); // v
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+            vertices.push_back(static_cast<float>(j) / (size - 1)); // x
+            vertices.push_back(static_cast<float>(i) / (size - 1)); // y
+            vertices.push_back(0.f);                                  // z
 
-				if (i < size - 1 && j < size - 1)
-				{
-					indexData.push_back(static_cast<uint16_t>(j + i * size));
-					indexData.push_back(static_cast<uint16_t>(j + i * size + size));
-					indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
-					indexData.push_back(static_cast<uint16_t>(j + i * size + 1));
-					indexData.push_back(static_cast<uint16_t>(j + i * size + size));
-					indexData.push_back(static_cast<uint16_t>(j + i * size + size + 1));
-				}
-			}
-		}
-	}
+            vertices.push_back(static_cast<float>(j) / (size - 1)); // u
+            vertices.push_back(static_cast<float>(i) / (size - 1)); // v
 
-	// void CreateHeightMap(int size, std::vector<uint8_t>& heightMap)
-	// {
-	// 	heightMap.clear();
-		
-	// 	const siv::PerlinNoise::seed_type seed = { 123456u }; 
-	// 	const siv::PerlinNoise perlin{ seed };
-	// 	const float freq = 8.f / TEXTURE_SIZE;
-
-	// 	for (int i = 0; i < size; i++)
-	// 	{
-	// 		for (int j = 0; j < size; j++) 
-	// 		{
-	// 			heightMap.push_back( static_cast<uint8_t>(255 * perlin.octave2D_01(j * freq, i * freq, 4)) );
-	// 			heightMap.push_back( 0 );
-	// 			heightMap.push_back( 0 );
-	// 			heightMap.push_back( 0 );
-	// 		}
-	// 	}
-	// }
-	
-	double jonswap(double pos_x, double pos_y, double fetch, double wind_x, double wind_y, double enhancment = 3.3)
-	{
-		using std::pow;
-		using std::exp;
-
-		auto freq = std::sqrt(pos_x * pos_x + pos_y * pos_y);
-		if (freq < 0.001) return 0.;
-		auto wind = std::sqrt(wind_x * wind_x + wind_y * wind_y);
-
-		double g = 9.81;
-		double freq_p = 22 * pow( pow(g, 2) / (fetch * wind), 1.0 / 3.0);
-		double alpha = 0.076 * pow( pow(wind, 2) / (fetch * g), 0.22);
-		double sigma = ( freq <= freq_p ) ? 0.07 : 0.09;
-		double r = exp( -pow(freq - freq_p, 2) / ( 2 * pow(sigma * freq_p, 2)));
-
-		double density = alpha * ( pow(g, 2) / pow(freq, 5) ) * exp( -5 * pow(freq_p / freq, 4) / 4) * pow(enhancment, r);
-		
-		return density; //* std::pow(std::max((pos_x / freq) * (wind_x / wind) + (pos_y / freq) * (wind_y / wind), 0.), 2);
-	}
-
-	void fillTextures(std::vector<float>& spectrum, std::vector<float>& k_data) // TODO add params
-	{
-		int N = TEXTURE_SIZE;
-		spectrum = std::vector<float>(N * N * 2);
-		k_data = std::vector<float>(N * N * 4);
-		std::random_device rd{};
-		std::mt19937 gen{rd()};
-		std::normal_distribution d{0., 1.};
-		auto rand_num = [&d, &gen]{ return d(gen); };
-
-		for (int ky = 0; ky < N; ky++) {
-			for (int kx = 0; kx < N; kx++) {
-				
-				int i = kx + ky * N;
-				
-				int sx = (N - kx) % N;
-				int sy = (N - ky) % N;
-				int j  = sx + sy * N;
-
-				int kx_m = (kx <= N/2) ? kx : kx - N;
-				int ky_m = (ky <= N/2) ? ky : ky - N;
-				
-				// physical wave vector
-				auto pos = [&](int x){ return 2 * static_cast<float>(x) * static_cast<float>(std::numbers::pi) / PATCH_SIZE; };
-				float kx_phys = pos(kx_m);
-				float ky_phys = pos(ky_m);
-
-				float k_len = std::sqrt(kx_phys * kx_phys + ky_phys * ky_phys);
-
-				float omega = std::sqrt(9.81f * k_len);
-
-				// store k data
-				k_data[4 * i + 0] = kx_phys;
-				k_data[4 * i + 1] = ky_phys;
-				k_data[4 * i + 2] = omega;
-				k_data[4 * i + 3] = 0.;
-
-				// mirrored pair gets mirrored k
-				k_data[4 * j + 0] = -kx_phys;
-				k_data[4 * j + 1] = -ky_phys;
-				k_data[4 * j + 2] = omega;
-				k_data[4 * j + 3] = 0.;
-
-				auto P = jonswap(kx_phys, ky_phys, 5000., 40., 0.);
-
-
-				auto gr = rand_num();
-				auto gi = rand_num();
-
-				auto scale = sqrt(P * 0.5f);
-
-				float re = static_cast<float>(gr * scale);
-				float im = static_cast<float>(gi * scale);
-
-
-				// Self-symmetric (Nyquist / DC cases)
-				if (i == j) {
-					spectrum[2*i] = re;
-					spectrum[2*i + 1] = 0.0f;
-				}
-				else {
-					spectrum[2*i]     = re;
-					spectrum[2*i + 1] = im;
-
-					spectrum[2*j]     = re;
-					spectrum[2*j + 1] = -im;
-				}
-			}
-		}
-	}
-
-	// std::pair<float, float> w_k(int k)
-	// {
-	// 	return {static_cast<float>(std::cos(2 * std::numbers::pi / TEXTURE_SIZE * k)),
-	// 				static_cast<float>(-std::sin(2 * std::numbers::pi / TEXTURE_SIZE * k))};
-	// }
+            if (i < size - 1 && j < size - 1) {
+                indices.push_back(static_cast<uint16_t>(j + i * size));
+                indices.push_back(static_cast<uint16_t>(j + i * size + size));
+                indices.push_back(static_cast<uint16_t>(j + i * size + 1));
+                indices.push_back(static_cast<uint16_t>(j + i * size + 1));
+                indices.push_back(static_cast<uint16_t>(j + i * size + size));
+                indices.push_back(static_cast<uint16_t>(j + i * size + size + 1));
+            }
+        }
+    }
 }
 
-Application::Application(int w, int h) : width(w), height(h) // TODO : add throws on errors
+/* JONSWAP directional wave spectrum. Returns spectral energy density at
+   wave vector (pos_x, pos_y) for a given fetch length and wind velocity. */
+double jonswap(double pos_x, double pos_y,
+               double fetch, double wind_x, double wind_y,
+               double enhancement = 3.3)
 {
-	// Open window
-	glfwInit();
-	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-	window = glfwCreateWindow(width, height, "Learn WebGPU", nullptr, nullptr);
-	glfwSetWindowUserPointer(window, this);
-	glfwSetMouseButtonCallback(window, OnMouseButton);
-	glfwSetCursorPosCallback(window, OnCursorPos);
-	glfwSetScrollCallback(window, OnScroll);
+    using std::pow, std::exp, std::sqrt;
 
-	Instance instance = wgpuCreateInstance(nullptr);
-	
-	// Get adapter
-	std::cout << "Requesting adapter..." << std::endl;
-	surface = glfwGetWGPUSurface(instance, window);
-	RequestAdapterOptions adapterOpts = {};
-	adapterOpts.compatibleSurface = surface;
-	Adapter adapter = instance.requestAdapter(adapterOpts);
-	std::cout << "Got adapter: " << adapter << std::endl;
-	
-	instance.release();
-	
+    double freq = sqrt(pos_x * pos_x + pos_y * pos_y);
+    if (freq < 0.001) return 0.0;
 
-	std::cout << "Requesting device..." << std::endl;
-	DeviceDescriptor deviceDesc = {};
-	deviceDesc.label = "My Device";
+    double wind  = sqrt(wind_x * wind_x + wind_y * wind_y);
+    double g     = 9.81;
+    double freq_p = 22.0 * pow(pow(g, 2.0) / (fetch * wind), 1.0 / 3.0);
+    double alpha  = 0.076 * pow(pow(wind, 2.0) / (fetch * g), 0.22);
+    double sigma  = (freq <= freq_p) ? 0.07 : 0.09;
+    double r      = exp(-pow(freq - freq_p, 2.0) / (2.0 * pow(sigma * freq_p, 2.0)));
 
-	WGPUFeatureName features[] = {
-		WGPUFeatureName_Float32Filterable,
-	};
-
-	deviceDesc.requiredFeatureCount = 1;
-	deviceDesc.requiredFeatures = features;
-	deviceDesc.requiredLimits = nullptr;
-	deviceDesc.defaultQueue.nextInChain = nullptr;
-	deviceDesc.defaultQueue.label = "The default queue";
-	deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void* /* pUserData */) {
-		std::cout << "Device lost: reason " << reason;
-		if (message) std::cout << " (" << message << ")";
-		std::cout << std::endl;
-	};
-	RequiredLimits requiredLimits = GetRequiredLimits(adapter);
-	deviceDesc.requiredLimits = &requiredLimits;
-	device = adapter.requestDevice(deviceDesc);
-	std::cout << "Got device: " << device << std::endl;
-	
-	// Device error callback
-	uncapturedErrorCallbackHandle = device.setUncapturedErrorCallback([](ErrorType type, char const* message) {
-		std::cout << "Uncaptured device error: type " << type;
-		if (message) std::cout << " (" << message << ")";
-		std::cout << std::endl;
-	});
-	
-	queue = device.getQueue();
-
-	// Configure the surface
-	SurfaceConfiguration config = {};
-	
-	// Configuration of the textures created for the underlying swap chain
-	config.width = width;
-	config.height = height;
-	config.usage = TextureUsage::RenderAttachment;
-	surfaceFormat = surface.getPreferredFormat(adapter);
-	config.format = surfaceFormat;
-
-	// And we do not need any particular view format:
-	config.viewFormatCount = 0;
-	config.viewFormats = nullptr;
-	config.device = device;
-	config.presentMode = PresentMode::Fifo;
-	config.alphaMode = CompositeAlphaMode::Auto;
-
-	surface.configure(config);
-
-	// Release the adapter only after it has been fully utilized
-	adapter.release();
-
-	InitPipeline();
-	InitCompute();
-	InitBuffers();
-	InitTextures();
-	InitBindGroups();
-	InitCubemap();
+    return alpha * (pow(g, 2.0) / pow(freq, 5.0))
+         * exp(-5.0 * pow(freq_p / freq, 4.0) / 4.0)
+         * pow(enhancement, r);
 }
 
-Application::~Application() // TODO: tidy up
+/* Generates the h0(k) initial spectrum and the k-data (wave-vector + dispersion) textures. */
+void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
 {
-	//
-	heightTextureView1.release();
-	heightTextureView2.release();
-	heightTexture1.destroy();
-	heightTexture2.destroy();
-	heightTexture1.release();
-	heightTexture2.release();
-	bindGroup.release();
-	layout.release();
-	bindGroupLayout.release();
-	c_layout.release();
-	c_bindGroupLayout.release();
-	uniformBuffer.release();
-	pointBuffer.release();
-	indexBuffer.release();
-	depthTextureView.release();
-	depthTexture.destroy();
-	depthTexture.release();
-	pipeline.release();
-	skyboxPipeline.release();
-	compPipeline.release();
-	
-	// core elements
-	surface.unconfigure();
-	queue.release();
-	surface.release();
-	device.release();
-	glfwDestroyWindow(window);
-	glfwTerminate();
+    const int N = TEXTURE_SIZE;
+    spectrum.assign(N * N * 2, 0.f);
+    k_data.assign(N * N * 4, 0.f);
+
+    std::mt19937 gen{ std::random_device{}() };
+    std::normal_distribution<double> dist{ 0.0, 1.0 };
+
+    for (int ky = 0; ky < N; ky++) {
+        for (int kx = 0; kx < N; kx++) {
+            int i  = kx + ky * N;
+            int sx = (N - kx) % N;
+            int sy = (N - ky) % N;
+            int j  = sx + sy * N;
+
+            int kx_m = (kx <= N / 2) ? kx : kx - N;
+            int ky_m = (ky <= N / 2) ? ky : ky - N;
+
+            float kx_phys = 2.f * static_cast<float>(std::numbers::pi) * kx_m / PATCH_SIZE;
+            float ky_phys = 2.f * static_cast<float>(std::numbers::pi) * ky_m / PATCH_SIZE;
+            float k_len   = std::sqrt(kx_phys * kx_phys + ky_phys * ky_phys);
+            float omega   = std::sqrt(9.81f * k_len);
+
+            k_data[4 * i + 0] = kx_phys;
+            k_data[4 * i + 1] = ky_phys;
+            k_data[4 * i + 2] = omega;
+
+            k_data[4 * j + 0] = -kx_phys;
+            k_data[4 * j + 1] = -ky_phys;
+            k_data[4 * j + 2] = omega;
+
+            double scale = std::sqrt(jonswap(kx_phys, ky_phys, 5000.0, 40.0, 0.0) * 0.5);
+            float  re    = static_cast<float>(dist(gen) * scale);
+            float  im    = static_cast<float>(dist(gen) * scale);
+
+            if (i == j) {
+                spectrum[2 * i]     = re;
+                spectrum[2 * i + 1] = 0.f; // force real for DC/Nyquist
+            } else {
+                spectrum[2 * i]     = re;
+                spectrum[2 * i + 1] = im;
+                spectrum[2 * j]     = re;
+                spectrum[2 * j + 1] = -im; // Hermitian symmetry
+            }
+        }
+    }
 }
 
-void Application::MainLoop() 
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Application lifecycle
+// ---------------------------------------------------------------------------
+
+Application::Application(int w, int h) : width(w), height(h)
 {
-	glfwPollEvents();
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    window = glfwCreateWindow(width, height, "FFT Ocean", nullptr, nullptr);
+    glfwSetWindowUserPointer(window, this);
+    glfwSetMouseButtonCallback(window, on_mouse_button);
+    glfwSetCursorPosCallback(window, on_cursor_pos);
+    glfwSetScrollCallback(window, on_scroll);
 
-	RunCompute();
+    Instance instance = wgpuCreateInstance(nullptr);
 
-	// Orbit camera: eye position from spherical coordinates (Z-up)
-	glm::vec3 eye(
-		cam_radius * std::cos(cam_phi) * std::cos(cam_theta),
-		cam_radius * std::cos(cam_phi) * std::sin(cam_theta),
-		cam_radius * std::sin(cam_phi)
-	);
-	uniforms.eye_pos    = eye;
-	uniforms.projection = glm::perspective(glm::radians(45.0f), static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
-	uniforms.view       = glm::lookAt(eye, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
-	uniforms.model = glm::mat4(1.f);
-	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+    surface = glfwGetWGPUSurface(instance, window);
+    RequestAdapterOptions adapter_opts = {};
+    adapter_opts.compatibleSurface = surface;
+    Adapter adapter = instance.requestAdapter(adapter_opts);
+    instance.release();
 
-	// Get the next target texture view
-	TextureView targetView = GetNextSurfaceTextureView();
-	if (!targetView) return;
+    DeviceDescriptor device_desc = {};
+    device_desc.label = "Main device";
+    WGPUFeatureName features[] = { WGPUFeatureName_Float32Filterable };
+    device_desc.requiredFeatureCount = 1;
+    device_desc.requiredFeatures     = features;
+    device_desc.defaultQueue.label   = "Main queue";
+    device_desc.deviceLostCallback   = [](WGPUDeviceLostReason reason, char const* msg, void*) {
+        std::cout << "Device lost: " << reason;
+        if (msg) std::cout << " (" << msg << ")";
+        std::cout << '\n';
+    };
+    RequiredLimits required_limits = get_required_limits(adapter);
+    device_desc.requiredLimits = &required_limits;
+    device = adapter.requestDevice(device_desc);
 
-	// Create a command encoder for the draw call
-	CommandEncoderDescriptor encoderDesc = {};
-	encoderDesc.label = "My command encoder";
-	CommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
+    error_callback = device.setUncapturedErrorCallback([](ErrorType type, char const* msg) {
+        std::cout << "Uncaptured device error: " << type;
+        if (msg) std::cout << " (" << msg << ")";
+        std::cout << '\n';
+    });
 
-	// Create the render pass that clears the screen with our color
-	RenderPassDescriptor renderPassDesc = {};
+    queue = device.getQueue();
 
-	// The attachment part of the render pass descriptor describes the target texture of the pass
-	RenderPassColorAttachment renderPassColorAttachment = {};
-	renderPassColorAttachment.view = targetView;
-	renderPassColorAttachment.resolveTarget = nullptr;
-	renderPassColorAttachment.loadOp = LoadOp::Clear;
-	renderPassColorAttachment.storeOp = StoreOp::Store;
-	renderPassColorAttachment.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
+    SurfaceConfiguration surface_config = {};
+    surface_config.width       = width;
+    surface_config.height      = height;
+    surface_config.usage       = TextureUsage::RenderAttachment;
+    surface_format             = surface.getPreferredFormat(adapter);
+    surface_config.format      = surface_format;
+    surface_config.device      = device;
+    surface_config.presentMode = PresentMode::Fifo;
+    surface_config.alphaMode   = CompositeAlphaMode::Auto;
+    surface.configure(surface_config);
+
+    adapter.release();
+
+    init_pipeline();
+    init_compute();
+    init_buffers();
+    init_textures();
+    init_bind_groups();
+    init_cubemap();
+}
+
+Application::~Application()
+{
+    for (int i = 0; i < 2; i++) {
+        height_texture_views[i].release();
+        height_textures[i].destroy();
+        height_textures[i].release();
+        slope_x_texture_views[i].release();
+        slope_x_textures[i].destroy();
+        slope_x_textures[i].release();
+        slope_y_texture_views[i].release();
+        slope_y_textures[i].destroy();
+        slope_y_textures[i].release();
+        h_fft_bind_groups[i].release();
+        sx_fft_bind_groups[i].release();
+        sy_fft_bind_groups[i].release();
+    }
+
+    time_spectrum_bind_group.release();
+
+    spectrum_texture_view.release();
+    spectrum_texture.destroy();
+    spectrum_texture.release();
+
+    butterfly_texture_view.release();
+    butterfly_texture.destroy();
+    butterfly_texture.release();
+
+    k_data_texture_view.release();
+    k_data_texture.destroy();
+    k_data_texture.release();
+
+    if (cubemap_texture_view) cubemap_texture_view.release();
+    if (cubemap_texture)      { cubemap_texture.destroy(); cubemap_texture.release(); }
+
+    bind_group.release();
+    pipeline_layout.release();
+    bind_group_layout.release();
+    time_spectrum_bgl.release();
+    time_spectrum_layout.release();
+    fft_bgl.release();
+    fft_layout.release();
+
+    uniform_buffer.release();
+    compute_uniform_buffer.release();
+    vertex_buffer.release();
+    index_buffer.release();
+
+    depth_texture_view.release();
+    depth_texture.destroy();
+    depth_texture.release();
+
+    pipeline.release();
+    skybox_pipeline.release();
+    time_spectrum_pipeline.release();
+    fft_h_pipeline.release();
+    fft_v_pipeline.release();
+
+    sampler.release();
+
+    surface.unconfigure();
+    queue.release();
+    surface.release();
+    device.release();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+
+void Application::main_loop()
+{
+    glfwPollEvents();
+
+    run_compute();
+
+    uniforms.eye_pos    = camera.eye();
+    uniforms.view       = camera.view();
+    uniforms.projection = glm::perspective(
+        glm::radians(45.f),
+        static_cast<float>(width) / static_cast<float>(height),
+        0.1f, 100.f);
+    uniforms.model = glm::mat4(1.f);
+    queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(MyUniforms));
+
+    TextureView target = get_next_surface_view();
+    if (!target) return;
+
+    CommandEncoderDescriptor enc_desc = {};
+    enc_desc.label = "Frame encoder";
+    CommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &enc_desc);
+
+    RenderPassColorAttachment color_att = {};
+    color_att.view       = target;
+    color_att.loadOp     = LoadOp::Clear;
+    color_att.storeOp    = StoreOp::Store;
+    color_att.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
 #ifndef WEBGPU_BACKEND_WGPU
- 	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-#endif // NOT WEBGPU_BACKEND_WGPU
+    color_att.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
 
-	renderPassDesc.colorAttachmentCount = 1;
-	renderPassDesc.colorAttachments = &renderPassColorAttachment;
-
-	// We now add a depth/stencil attachment:
-	RenderPassDepthStencilAttachment depthStencilAttachment;
-	// The view of the depth texture
-	depthStencilAttachment.view = depthTextureView;
-
-	// The initial value of the depth buffer, meaning "far"
-	depthStencilAttachment.depthClearValue = 1.0f;
-	// Operation settings comparable to the color attachment
-	depthStencilAttachment.depthLoadOp = LoadOp::Clear;
-	depthStencilAttachment.depthStoreOp = StoreOp::Store;
-	// we could turn off writing to the depth buffer globally here
-	depthStencilAttachment.depthReadOnly = false;
-
-	// Stencil setup, mandatory but unused
-	depthStencilAttachment.stencilClearValue = 0;
-
+    RenderPassDepthStencilAttachment depth_att;
+    depth_att.view              = depth_texture_view;
+    depth_att.depthClearValue   = 1.f;
+    depth_att.depthLoadOp       = LoadOp::Clear;
+    depth_att.depthStoreOp      = StoreOp::Store;
+    depth_att.depthReadOnly     = false;
+    depth_att.stencilClearValue = 0;
 #ifdef WEBGPU_BACKEND_WGPU
-	depthStencilAttachment.stencilLoadOp = LoadOp::Clear;
-	depthStencilAttachment.stencilStoreOp = StoreOp::Store;
+    depth_att.stencilLoadOp  = LoadOp::Clear;
+    depth_att.stencilStoreOp = StoreOp::Store;
 #else
-	depthStencilAttachment.stencilLoadOp = LoadOp::Undefined;
-	depthStencilAttachment.stencilStoreOp = StoreOp::Undefined;
+    depth_att.stencilLoadOp  = LoadOp::Undefined;
+    depth_att.stencilStoreOp = StoreOp::Undefined;
 #endif
-	depthStencilAttachment.stencilReadOnly = true;
+    depth_att.stencilReadOnly = true;
 
-	renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
+    RenderPassDescriptor pass_desc = {};
+    pass_desc.colorAttachmentCount   = 1;
+    pass_desc.colorAttachments       = &color_att;
+    pass_desc.depthStencilAttachment = &depth_att;
 
-	renderPassDesc.timestampWrites = nullptr;
+    RenderPassEncoder pass = encoder.beginRenderPass(pass_desc);
 
-	RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
+    // Water mesh
+    pass.setPipeline(pipeline);
+    pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer.getSize());
+    pass.setIndexBuffer(index_buffer, IndexFormat::Uint16, 0, index_buffer.getSize());
+    pass.setBindGroup(0, bind_group, 0, nullptr);
+    pass.drawIndexed(index_count, 1, 0, 0, 0);
 
-	// Select which render pipeline to use
-	renderPass.setPipeline(pipeline);
+    // Skybox — drawn last, depth LessEqual, no depth write; fills background only
+    pass.setPipeline(skybox_pipeline);
+    pass.setBindGroup(0, bind_group, 0, nullptr);
+    pass.draw(3, 1, 0, 0);
 
-	// Set vertex buffer while encoding the render pass
-	renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
-	
-	// The second argument must correspond to the choice of uint16_t or uint32_t
-	// we've done when creating the index buffer.
-	renderPass.setIndexBuffer(indexBuffer, IndexFormat::Uint16, 0, indexBuffer.getSize());
+    pass.end();
+    pass.release();
 
-	// Set binding group here!
-	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
+    CommandBufferDescriptor cmd_desc = {};
+    CommandBuffer command = encoder.finish(cmd_desc);
+    encoder.release();
+    queue.submit(1, &command);
+    command.release();
 
-	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
-
-	// Skybox drawn after water: only fills pixels where depth == 1.0 (no geometry)
-	renderPass.setPipeline(skyboxPipeline);
-	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
-	renderPass.draw(3, 1, 0, 0);
-
-	renderPass.end();
-	renderPass.release();
-
-	// Finally encode and submit the render pass
-	CommandBufferDescriptor cmdBufferDescriptor = {};
-	cmdBufferDescriptor.label = "Command buffer";
-	CommandBuffer command = encoder.finish(cmdBufferDescriptor);
-	encoder.release();
-	//std::cout << "Submitting command..." << std::endl;
-	queue.submit(1, &command);
-	command.release();
-	//std::cout << "Command submitted." << std::endl;
-
-	// At the end of the frame
-	targetView.release();
+    target.release();
 #ifndef __EMSCRIPTEN__
-	surface.present();
+    surface.present();
 #endif
-
 #if defined(WEBGPU_BACKEND_DAWN)
-	device.tick();
+    device.tick();
 #elif defined(WEBGPU_BACKEND_WGPU)
-	device.poll(false);
+    device.poll(false);
 #endif
 }
 
-bool Application::IsRunning()
+bool Application::is_running()
 {
-	return !glfwWindowShouldClose(window);
+    return !glfwWindowShouldClose(window);
 }
 
-void Application::OnMouseButton(GLFWwindow* w, int button, int action, int /*mods*/)
+// ---------------------------------------------------------------------------
+// GLFW input callbacks
+// ---------------------------------------------------------------------------
+
+void Application::on_mouse_button(GLFWwindow* w, int button, int action, int /*mods*/)
 {
-	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
-	if (button == GLFW_MOUSE_BUTTON_LEFT) {
-		app->mouse_dragging = (action == GLFW_PRESS);
-		if (app->mouse_dragging)
-			glfwGetCursorPos(w, &app->last_mouse_x, &app->last_mouse_y);
-	}
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        app->mouse_dragging = (action == GLFW_PRESS);
+        if (app->mouse_dragging)
+            glfwGetCursorPos(w, &app->last_mouse_x, &app->last_mouse_y);
+    }
 }
 
-void Application::OnCursorPos(GLFWwindow* w, double x, double y)
+void Application::on_cursor_pos(GLFWwindow* w, double x, double y)
 {
-	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
-	if (!app->mouse_dragging) return;
-	double dx = x - app->last_mouse_x;
-	double dy = y - app->last_mouse_y;
-	app->last_mouse_x = x;
-	app->last_mouse_y = y;
-	app->cam_theta += static_cast<float>(dx) * 0.005f;
-	app->cam_phi   -= static_cast<float>(dy) * 0.005f;
-	app->cam_phi    = glm::clamp(app->cam_phi, glm::radians(-85.0f), glm::radians(85.0f));
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+    if (!app->mouse_dragging) return;
+    float dx = static_cast<float>(x - app->last_mouse_x);
+    float dy = static_cast<float>(y - app->last_mouse_y);
+    app->last_mouse_x = x;
+    app->last_mouse_y = y;
+    app->camera.orbit(dx * 0.005f, -dy * 0.005f);
 }
 
-void Application::OnScroll(GLFWwindow* w, double /*dx*/, double dy)
+void Application::on_scroll(GLFWwindow* w, double /*dx*/, double dy)
 {
-	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
-	app->cam_radius *= std::pow(0.9f, static_cast<float>(dy));
-	app->cam_radius  = glm::clamp(app->cam_radius, 0.5f, 50.0f);
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+    app->camera.zoom(static_cast<float>(dy));
 }
 
-TextureView Application::GetNextSurfaceTextureView() 
-{
-	// Get the surface texture
-	SurfaceTexture surfaceTexture;
-	surface.getCurrentTexture(&surfaceTexture);
-	if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success) {
-		return nullptr;
-	}
-	Texture texture = surfaceTexture.texture;
+// ---------------------------------------------------------------------------
+// Surface texture helper
+// ---------------------------------------------------------------------------
 
-	// Create a view for this surface texture
-	TextureViewDescriptor viewDescriptor;
-	viewDescriptor.label = "Surface texture view";
-	viewDescriptor.format = texture.getFormat();
-	viewDescriptor.dimension = TextureViewDimension::_2D;
-	viewDescriptor.baseMipLevel = 0;
-	viewDescriptor.mipLevelCount = 1;
-	viewDescriptor.baseArrayLayer = 0;
-	viewDescriptor.arrayLayerCount = 1;
-	viewDescriptor.aspect = TextureAspect::All;
-	TextureView targetView = texture.createView(viewDescriptor);
+TextureView Application::get_next_surface_view()
+{
+    SurfaceTexture surface_tex;
+    surface.getCurrentTexture(&surface_tex);
+    if (surface_tex.status != SurfaceGetCurrentTextureStatus::Success) return nullptr;
+
+    Texture texture = surface_tex.texture;
+
+    TextureViewDescriptor view_desc;
+    view_desc.label           = "Surface view";
+    view_desc.format          = texture.getFormat();
+    view_desc.dimension       = TextureViewDimension::_2D;
+    view_desc.baseMipLevel    = 0;
+    view_desc.mipLevelCount   = 1;
+    view_desc.baseArrayLayer  = 0;
+    view_desc.arrayLayerCount = 1;
+    view_desc.aspect          = TextureAspect::All;
 
 #ifndef WEBGPU_BACKEND_WGPU
-	// We no longer need the texture, only its view
-	// (NB: with wgpu-native, surface textures must not be manually released)
-	wgpuTextureRelease(surfaceTexture.texture);
-#endif // WEBGPU_BACKEND_WGPU
-
-	return targetView;
+    wgpuTextureRelease(surface_tex.texture);
+#endif
+    return texture.createView(view_desc);
 }
 
-void Application::InitPipeline() 
+// ---------------------------------------------------------------------------
+// Pipeline initialisation
+// ---------------------------------------------------------------------------
+
+void Application::init_pipeline()
 {
-	ShaderModule waterModule  = ResourceManager::loadShaderModule(RESOURCE_DIR "/water.wgsl",  device);
-	ShaderModule skyboxModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/skybox.wgsl", device);
+    ShaderModule water_module  = ResourceManager::load_shader_module(RESOURCE_DIR "/water.wgsl",  device);
+    ShaderModule skybox_module = ResourceManager::load_shader_module(RESOURCE_DIR "/skybox.wgsl", device);
+    if (!water_module || !skybox_module) {
+        std::cerr << "Could not load shaders!\n";
+        std::exit(1);
+    }
 
-	if (waterModule == nullptr || skyboxModule == nullptr) {
-		std::cerr << "Could not load shaders!" << std::endl;
-		exit(1);
-	}
+    // --- bind group layout (shared by both render pipelines) ---
+    std::vector<BindGroupLayoutEntry> entries = {
+        uniform_layout (0, ShaderStage::Vertex | ShaderStage::Fragment, false, sizeof(MyUniforms)),
+        texture_layout (1, ShaderStage::Vertex | ShaderStage::Fragment),
+        sampler_layout (2, ShaderStage::Fragment),
+        texture_layout (3, ShaderStage::Fragment, TextureSampleType::Float, TextureViewDimension::Cube),
+        texture_layout (4, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+        texture_layout (5, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+    };
 
-	// Create the render pipeline
-	RenderPipelineDescriptor pipelineDesc;
+    BindGroupLayoutDescriptor bgl_desc = {};
+    bgl_desc.entryCount = static_cast<uint32_t>(entries.size());
+    bgl_desc.entries    = entries.data();
+    bind_group_layout   = device.createBindGroupLayout(bgl_desc);
 
-	// Configure the vertex pipeline
-	// We use one vertex buffer
-	VertexBufferLayout vertexBufferLayout;
-	// We now have 2 attributes
-	std::vector<VertexAttribute> vertexAttribs(2);
-	
-	// Describe the position attribute
-	vertexAttribs[0].shaderLocation = 0; // @location(0)
-	vertexAttribs[0].format = VertexFormat::Float32x2;
-	vertexAttribs[0].offset = 0;
+    PipelineLayoutDescriptor layout_desc = {};
+    layout_desc.bindGroupLayoutCount = 1;
+    layout_desc.bindGroupLayouts     = reinterpret_cast<WGPUBindGroupLayout*>(&bind_group_layout);
+    pipeline_layout                  = device.createPipelineLayout(layout_desc);
 
-	vertexAttribs[1].shaderLocation = 1;
-	vertexAttribs[1].format = VertexFormat::Float32x2;
-	vertexAttribs[1].offset = 3 * sizeof(float);
-	
-	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
-	vertexBufferLayout.attributes = vertexAttribs.data();
-	
-	vertexBufferLayout.arrayStride = 5 * sizeof(float);
+    // --- depth buffer ---
+    TextureFormat depth_format = TextureFormat::Depth24Plus;
 
-	vertexBufferLayout.stepMode = VertexStepMode::Vertex;
-	
-	pipelineDesc.vertex.bufferCount = 1;
-	pipelineDesc.vertex.buffers = &vertexBufferLayout;
+    TextureDescriptor depth_tex_desc;
+    depth_tex_desc.dimension      = TextureDimension::_2D;
+    depth_tex_desc.format         = depth_format;
+    depth_tex_desc.mipLevelCount  = 1;
+    depth_tex_desc.sampleCount    = 1;
+    depth_tex_desc.size           = { width, height, 1 };
+    depth_tex_desc.usage          = TextureUsage::RenderAttachment;
+    depth_tex_desc.viewFormatCount = 1;
+    depth_tex_desc.viewFormats    = reinterpret_cast<WGPUTextureFormat*>(&depth_format);
+    depth_texture                 = device.createTexture(depth_tex_desc);
 
-	// NB: We define the 'shaderModule' in the second part of this chapter.
-	// Here we tell that the programmable vertex shader stage is described
-	// by the function called 'vs_main' in that module.
-	pipelineDesc.vertex.module = waterModule;
-	pipelineDesc.vertex.entryPoint = "vs_main";
-	pipelineDesc.vertex.constantCount = 0;
-	pipelineDesc.vertex.constants = nullptr;
+    TextureViewDescriptor depth_view_desc;
+    depth_view_desc.aspect          = TextureAspect::DepthOnly;
+    depth_view_desc.baseArrayLayer  = 0;
+    depth_view_desc.arrayLayerCount = 1;
+    depth_view_desc.baseMipLevel    = 0;
+    depth_view_desc.mipLevelCount   = 1;
+    depth_view_desc.dimension       = TextureViewDimension::_2D;
+    depth_view_desc.format          = depth_format;
+    depth_texture_view              = depth_texture.createView(depth_view_desc);
 
-	// Each sequence of 3 vertices is considered as a triangle
-	pipelineDesc.primitive.topology = PrimitiveTopology::TriangleList;
-	
-	// We'll see later how to specify the order in which vertices should be
-	// connected. When not specified, vertices are considered sequentially.
-	pipelineDesc.primitive.stripIndexFormat = IndexFormat::Undefined;
-	
-	// The face orientation is defined by assuming that when looking
-	// from the front of the face, its corner vertices are enumerated
-	// in the counter-clockwise (CCW) order.
-	pipelineDesc.primitive.frontFace = FrontFace::CCW;
-	
-	// But the face orientation does not matter much because we do not
-	// cull (i.e. "hide") the faces pointing away from us (which is often
-	// used for optimization).
-	pipelineDesc.primitive.cullMode = CullMode::None;
+    // --- shared fragment / color target state ---
+    BlendState blend;
+    blend.color = { BlendOperation::Add, BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha };
+    blend.alpha = { BlendOperation::Add, BlendFactor::Zero,     BlendFactor::One };
 
-	// We tell that the programmable fragment shader stage is described
-	// by the function called 'fs_main' in the shader module.
-	FragmentState fragmentState;
-	fragmentState.module = waterModule;
-	fragmentState.entryPoint = "fs_main";
-	fragmentState.constantCount = 0;
-	fragmentState.constants = nullptr;
+    ColorTargetState color_target;
+    color_target.format    = surface_format;
+    color_target.blend     = &blend;
+    color_target.writeMask = ColorWriteMask::All;
 
-	BlendState blendState;
-	blendState.color.srcFactor = BlendFactor::SrcAlpha;
-	blendState.color.dstFactor = BlendFactor::OneMinusSrcAlpha;
-	blendState.color.operation = BlendOperation::Add;
-	blendState.alpha.srcFactor = BlendFactor::Zero;
-	blendState.alpha.dstFactor = BlendFactor::One;
-	blendState.alpha.operation = BlendOperation::Add;
-	
-	ColorTargetState colorTarget;
-	colorTarget.format = surfaceFormat;
-	colorTarget.blend = &blendState;
-	colorTarget.writeMask = ColorWriteMask::All; // We could write to only some of the color channels.
-	
-	// We have only one target because our render pass has only one output color
-	// attachment.
-	fragmentState.targetCount = 1;
-	fragmentState.targets = &colorTarget;
-	pipelineDesc.fragment = &fragmentState;
+    DepthStencilState depth_state = Default;
+    depth_state.format            = depth_format;
+    depth_state.depthCompare      = CompareFunction::Less;
+    depth_state.depthWriteEnabled = true;
+    depth_state.stencilReadMask   = 0;
+    depth_state.stencilWriteMask  = 0;
 
-	DepthStencilState depthStencilState = Default;
-	depthStencilState.depthCompare = CompareFunction::Less;
-	depthStencilState.depthWriteEnabled = true;
-	// Store the format in a variable as later parts of the code depend on it
-	TextureFormat depthTextureFormat = TextureFormat::Depth24Plus;
-	depthStencilState.format = depthTextureFormat;
+    // --- water render pipeline ---
+    std::vector<VertexAttribute> attribs(2);
+    attribs[0].format         = VertexFormat::Float32x3;
+    attribs[0].offset         = 0;
+    attribs[0].shaderLocation = 0;
+    attribs[1].format         = VertexFormat::Float32x2;
+    attribs[1].offset         = 3 * sizeof(float);
+    attribs[1].shaderLocation = 1;
 
-	// Deactivate the stencil alltogether
-	depthStencilState.stencilReadMask = 0;
-	depthStencilState.stencilWriteMask = 0;
+    VertexBufferLayout vbl;
+    vbl.attributeCount = static_cast<uint32_t>(attribs.size());
+    vbl.attributes     = attribs.data();
+    vbl.arrayStride    = 5 * sizeof(float);
+    vbl.stepMode       = VertexStepMode::Vertex;
 
-	pipelineDesc.depthStencil = &depthStencilState;
+    FragmentState water_fragment;
+    water_fragment.module        = water_module;
+    water_fragment.entryPoint    = "fs_main";
+    water_fragment.constantCount = 0;
+    water_fragment.constants     = nullptr;
+    water_fragment.targetCount   = 1;
+    water_fragment.targets       = &color_target;
 
-	pipelineDesc.multisample.count = 1;	
-	pipelineDesc.multisample.mask = ~0u;
-	pipelineDesc.multisample.alphaToCoverageEnabled = false;
+    RenderPipelineDescriptor water_desc;
+    water_desc.vertex.module       = water_module;
+    water_desc.vertex.entryPoint   = "vs_main";
+    water_desc.vertex.bufferCount  = 1;
+    water_desc.vertex.buffers      = &vbl;
+    water_desc.vertex.constantCount = 0;
+    water_desc.vertex.constants    = nullptr;
+    water_desc.primitive.topology         = PrimitiveTopology::TriangleList;
+    water_desc.primitive.stripIndexFormat = IndexFormat::Undefined;
+    water_desc.primitive.frontFace        = FrontFace::CCW;
+    water_desc.primitive.cullMode         = CullMode::None;
+    water_desc.fragment                   = &water_fragment;
+    water_desc.depthStencil               = &depth_state;
+    water_desc.multisample.count          = 1;
+    water_desc.multisample.mask           = ~0u;
+    water_desc.multisample.alphaToCoverageEnabled = false;
+    water_desc.layout                     = pipeline_layout;
+    pipeline = device.createRenderPipeline(water_desc);
 
-	// Create the depth texture
-	TextureDescriptor depthTextureDesc;
-	depthTextureDesc.dimension = TextureDimension::_2D;
-	depthTextureDesc.format = depthTextureFormat;
-	depthTextureDesc.mipLevelCount = 1;
-	depthTextureDesc.sampleCount = 1;
-	depthTextureDesc.size = {width, height, 1};
-	depthTextureDesc.usage = TextureUsage::RenderAttachment;
-	depthTextureDesc.viewFormatCount = 1;
-	depthTextureDesc.viewFormats = (WGPUTextureFormat*)&depthTextureFormat;
-	depthTexture = device.createTexture(depthTextureDesc);
-	
-	// Create the view of the depth texture manipulated by the rasterizer
-	TextureViewDescriptor depthTextureViewDesc;
-	depthTextureViewDesc.aspect = TextureAspect::DepthOnly;
-	depthTextureViewDesc.baseArrayLayer = 0;
-	depthTextureViewDesc.arrayLayerCount = 1;
-	depthTextureViewDesc.baseMipLevel = 0;
-	depthTextureViewDesc.mipLevelCount = 1;
-	depthTextureViewDesc.dimension = TextureViewDimension::_2D;
-	depthTextureViewDesc.format = depthTextureFormat;
-	depthTextureView = depthTexture.createView(depthTextureViewDesc);
+    // --- skybox render pipeline (no vertex buffer, depth LessEqual, no depth write) ---
+    DepthStencilState skybox_depth = Default;
+    skybox_depth.format            = depth_format;
+    skybox_depth.depthCompare      = CompareFunction::LessEqual;
+    skybox_depth.depthWriteEnabled = false;
+    skybox_depth.stencilReadMask   = 0;
+    skybox_depth.stencilWriteMask  = 0;
 
+    FragmentState skybox_fragment;
+    skybox_fragment.module        = skybox_module;
+    skybox_fragment.entryPoint    = "fs_skybox";
+    skybox_fragment.constantCount = 0;
+    skybox_fragment.constants     = nullptr;
+    skybox_fragment.targetCount   = 1;
+    skybox_fragment.targets       = &color_target;
 
-	// Samples per pixel
-	pipelineDesc.multisample.count = 1;
+    RenderPipelineDescriptor skybox_desc;
+    skybox_desc.vertex.module        = skybox_module;
+    skybox_desc.vertex.entryPoint    = "vs_skybox";
+    skybox_desc.vertex.bufferCount   = 0;
+    skybox_desc.vertex.buffers       = nullptr;
+    skybox_desc.vertex.constantCount = 0;
+    skybox_desc.vertex.constants     = nullptr;
+    skybox_desc.primitive.topology         = PrimitiveTopology::TriangleList;
+    skybox_desc.primitive.stripIndexFormat = IndexFormat::Undefined;
+    skybox_desc.primitive.frontFace        = FrontFace::CCW;
+    skybox_desc.primitive.cullMode         = CullMode::None;
+    skybox_desc.fragment                   = &skybox_fragment;
+    skybox_desc.depthStencil               = &skybox_depth;
+    skybox_desc.multisample.count          = 1;
+    skybox_desc.multisample.mask           = ~0u;
+    skybox_desc.multisample.alphaToCoverageEnabled = false;
+    skybox_desc.layout                     = pipeline_layout;
+    skybox_pipeline = device.createRenderPipeline(skybox_desc);
 
-	// Default value for the mask, meaning "all bits on"
-	pipelineDesc.multisample.mask = ~0u;
-
-	// Default value as well (irrelevant for count = 1 anyways)
-	pipelineDesc.multisample.alphaToCoverageEnabled = false;
-
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
-
-	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
-	bindingLayout.binding = 0;
-	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
-	bindingLayout.buffer.type = BufferBindingType::Uniform;
-	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
-
-	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
-	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
-	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
-	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
-
-	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
-	samplerBindingLayout.binding = 2;
-	samplerBindingLayout.visibility = ShaderStage::Fragment;
-	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
-
-	BindGroupLayoutEntry& cubemapBindingLayout = bindingLayoutEntries[3];
-	cubemapBindingLayout.binding = 3;
-	cubemapBindingLayout.visibility = ShaderStage::Fragment;
-	cubemapBindingLayout.texture.sampleType = TextureSampleType::Float;
-	cubemapBindingLayout.texture.viewDimension = TextureViewDimension::Cube;
-
-	// Create a bind group layout
-	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
-	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
-	bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
-
-	// Create the pipeline layout
-	PipelineLayoutDescriptor layoutDesc{};
-	layoutDesc.bindGroupLayoutCount = 1;
-	layoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
-	layout = device.createPipelineLayout(layoutDesc);
-
-	pipelineDesc.layout = layout;
-
-	pipeline = device.createRenderPipeline(pipelineDesc);
-
-	// Skybox pipeline: fullscreen triangle, no vertex buffer, depth LessEqual + no write
-	RenderPipelineDescriptor skyboxDesc;
-	skyboxDesc.vertex.module       = skyboxModule;
-	skyboxDesc.vertex.entryPoint   = "vs_skybox";
-	skyboxDesc.vertex.bufferCount  = 0;
-	skyboxDesc.vertex.buffers      = nullptr;
-	skyboxDesc.vertex.constantCount = 0;
-	skyboxDesc.vertex.constants    = nullptr;
-	skyboxDesc.primitive.topology         = PrimitiveTopology::TriangleList;
-	skyboxDesc.primitive.stripIndexFormat = IndexFormat::Undefined;
-	skyboxDesc.primitive.frontFace        = FrontFace::CCW;
-	skyboxDesc.primitive.cullMode         = CullMode::None;
-
-	FragmentState skyboxFragment;
-	skyboxFragment.module        = skyboxModule;
-	skyboxFragment.entryPoint    = "fs_skybox";
-	skyboxFragment.constantCount = 0;
-	skyboxFragment.constants     = nullptr;
-	skyboxFragment.targetCount   = 1;
-	skyboxFragment.targets       = &colorTarget;
-	skyboxDesc.fragment = &skyboxFragment;
-
-	DepthStencilState skyboxDepth = Default;
-	skyboxDepth.format            = depthTextureFormat;
-	skyboxDepth.depthWriteEnabled = false;
-	skyboxDepth.depthCompare      = CompareFunction::LessEqual;
-	skyboxDepth.stencilReadMask   = 0;
-	skyboxDepth.stencilWriteMask  = 0;
-	skyboxDesc.depthStencil = &skyboxDepth;
-
-	skyboxDesc.multisample.count                  = 1;
-	skyboxDesc.multisample.mask                   = ~0u;
-	skyboxDesc.multisample.alphaToCoverageEnabled = false;
-	skyboxDesc.layout = layout;
-
-	skyboxPipeline = device.createRenderPipeline(skyboxDesc);
-
-	waterModule.release();
-	skyboxModule.release();
+    water_module.release();
+    skybox_module.release();
 }
 
-void Application::InitCompute()
+// ---------------------------------------------------------------------------
+// Compute pipeline initialisation
+// ---------------------------------------------------------------------------
+
+void Application::init_compute()
 {
-	// Load compute shader
-	ShaderModule computeShaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/compute.wgsl", device);
+    // --- time_spectrum pipeline (time_spectrum.wgsl) ---
+    {
+        ShaderModule ts_module = ResourceManager::load_shader_module(
+            RESOURCE_DIR "/time_spectrum.wgsl", device);
 
-	// Create compute pipeline layout
+        std::vector<BindGroupLayoutEntry> ts_entries = {
+            uniform_layout        (0, ShaderStage::Compute, false, sizeof(ComputeUniforms)),
+            storage_texture_layout(1, ShaderStage::Compute),
+            texture_layout        (2, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
+            texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
+            storage_texture_layout(4, ShaderStage::Compute),
+            storage_texture_layout(5, ShaderStage::Compute),
+        };
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(6, Default);
+        BindGroupLayoutDescriptor bgl_desc = {};
+        bgl_desc.entryCount = static_cast<uint32_t>(ts_entries.size());
+        bgl_desc.entries    = ts_entries.data();
+        time_spectrum_bgl   = device.createBindGroupLayout(bgl_desc);
 
-	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
-	uniformBindingLayout.binding = 4;
-	uniformBindingLayout.visibility = ShaderStage::Compute;
-	uniformBindingLayout.buffer.type = BufferBindingType::Uniform;
-	uniformBindingLayout.buffer.hasDynamicOffset = true;
-	uniformBindingLayout.buffer.minBindingSize = sizeof(c_Uniforms);
+        PipelineLayoutDescriptor layout_desc = {};
+        layout_desc.bindGroupLayoutCount = 1;
+        layout_desc.bindGroupLayouts     = reinterpret_cast<WGPUBindGroupLayout*>(&time_spectrum_bgl);
+        time_spectrum_layout             = device.createPipelineLayout(layout_desc);
 
-	BindGroupLayoutEntry& textureOutBindingLayout = bindingLayoutEntries[1];
-	textureOutBindingLayout.binding = 5;
-	textureOutBindingLayout.visibility = ShaderStage::Compute;
-	textureOutBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
-	textureOutBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
-	textureOutBindingLayout.storageTexture.format = TextureFormat::RGBA32Float;
+        ComputePipelineDescriptor pipe_desc;
+        pipe_desc.layout                = time_spectrum_layout;
+        pipe_desc.compute.module        = ts_module;
+        pipe_desc.compute.entryPoint    = "timeSpectrum";
+        pipe_desc.compute.constantCount = 0;
+        pipe_desc.compute.constants     = nullptr;
+        time_spectrum_pipeline = device.createComputePipeline(pipe_desc);
 
-	BindGroupLayoutEntry& textureInBindingLayout = bindingLayoutEntries[2];
-	textureInBindingLayout.binding = 6;
-	textureInBindingLayout.visibility = ShaderStage::Compute;
-	textureInBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
-	textureInBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+        ts_module.release();
+    }
 
-	BindGroupLayoutEntry& spectrumBindingLayout = bindingLayoutEntries[3];
-	spectrumBindingLayout.binding = 7;
-	spectrumBindingLayout.visibility = ShaderStage::Compute;
-	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
-	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+    // --- FFT pipeline (fft.wgsl) ---
+    {
+        ShaderModule fft_module = ResourceManager::load_shader_module(
+            RESOURCE_DIR "/fft.wgsl", device);
 
-	BindGroupLayoutEntry& butterflyBindingLayout = bindingLayoutEntries[4];
-	butterflyBindingLayout.binding = 8;
-	butterflyBindingLayout.visibility = ShaderStage::Compute;
-	butterflyBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
-	butterflyBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+        std::vector<BindGroupLayoutEntry> fft_entries = {
+            uniform_layout        (0, ShaderStage::Compute, true, sizeof(ComputeUniforms)),
+            storage_texture_layout(1, ShaderStage::Compute),
+            texture_layout        (2, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
+            texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
+        };
 
-	BindGroupLayoutEntry& kDataBindingLayout = bindingLayoutEntries[5];
-	kDataBindingLayout.binding = 9;
-	kDataBindingLayout.visibility = ShaderStage::Compute;
-	kDataBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
-	kDataBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+        BindGroupLayoutDescriptor bgl_desc = {};
+        bgl_desc.entryCount = static_cast<uint32_t>(fft_entries.size());
+        bgl_desc.entries    = fft_entries.data();
+        fft_bgl             = device.createBindGroupLayout(bgl_desc);
 
+        PipelineLayoutDescriptor layout_desc = {};
+        layout_desc.bindGroupLayoutCount = 1;
+        layout_desc.bindGroupLayouts     = reinterpret_cast<WGPUBindGroupLayout*>(&fft_bgl);
+        fft_layout                       = device.createPipelineLayout(layout_desc);
 
-	// Create a bind group layout
-	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
-	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
-	c_bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
+        ComputePipelineDescriptor pipe_desc;
+        pipe_desc.layout                = fft_layout;
+        pipe_desc.compute.module        = fft_module;
+        pipe_desc.compute.constantCount = 0;
+        pipe_desc.compute.constants     = nullptr;
 
-	PipelineLayoutDescriptor pipelineLayoutDesc;
-	pipelineLayoutDesc.bindGroupLayoutCount = 1;
-	pipelineLayoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&c_bindGroupLayout;
-	c_layout = device.createPipelineLayout(pipelineLayoutDesc);
+        pipe_desc.compute.entryPoint = "fft_horizontal";
+        fft_h_pipeline = device.createComputePipeline(pipe_desc);
 
-	// Create compute pipeline
-	ComputePipelineDescriptor computePipelineDesc;
-	computePipelineDesc.compute.constantCount = 0;
-	computePipelineDesc.compute.constants = nullptr;
-	computePipelineDesc.compute.entryPoint = "cs_main";
-	computePipelineDesc.compute.module = computeShaderModule;
-	computePipelineDesc.layout = c_layout;
-	compPipeline = device.createComputePipeline(computePipelineDesc);
-	
-	computePipelineDesc.compute.entryPoint = "timeSpectrum";
-	time_spectrum_pipe = device.createComputePipeline(computePipelineDesc);
+        pipe_desc.compute.entryPoint = "fft_vertical";
+        fft_v_pipeline = device.createComputePipeline(pipe_desc);
 
-	computePipelineDesc.compute.entryPoint = "fft_horizontal";
-	fft_horizontal_pipe = device.createComputePipeline(computePipelineDesc);
-
-	computePipelineDesc.compute.entryPoint = "fft_vertical";
-	fft_vertical_pipe = device.createComputePipeline(computePipelineDesc);
-
+        fft_module.release();
+    }
 }
 
-void Application::RunCompute()
+// ---------------------------------------------------------------------------
+// Compute dispatch
+// ---------------------------------------------------------------------------
+
+void Application::run_compute()
 {
-	// Pre-fill all TEXTURE_LOG stage slots in c_uniformBuffer before encoding.
-	// Each slot is at offset s * c_uniformStride; dynamic offsets select the right slot per dispatch.
-	float currentTime = static_cast<float>(glfwGetTime());
-	std::vector<uint8_t> ubuf(c_uniformStride * TEXTURE_LOG, 0);
-	for (int s = 0; s < TEXTURE_LOG; s++) {
-		c_Uniforms cu{ currentTime, static_cast<unsigned>(s), TEXTURE_SIZE, 0.f };
-		memcpy(ubuf.data() + s * c_uniformStride, &cu, sizeof(c_Uniforms));
-	}
-	queue.writeBuffer(c_uniformBuffer, 0, ubuf.data(), ubuf.size());
+    /* Pre-fill all TEXTURE_LOG uniform slots before encoding so each FFT stage
+       dispatch can select its slot via a dynamic offset within a single pass. */
+    const float t = static_cast<float>(glfwGetTime());
+    std::vector<uint8_t> ubuf(compute_uniform_stride * TEXTURE_LOG, 0);
+    for (int s = 0; s < TEXTURE_LOG; s++) {
+        ComputeUniforms cu{ t, static_cast<uint32_t>(s), TEXTURE_SIZE, 0.f };
+        std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(ComputeUniforms));
+    }
+    queue.writeBuffer(compute_uniform_buffer, 0, ubuf.data(), ubuf.size());
 
-    CommandEncoderDescriptor encoderDesc = Default;
-    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+    CommandEncoder encoder = device.createCommandEncoder(CommandEncoderDescriptor{});
 
-	ComputePassDescriptor computePassDesc;
-	computePassDesc.timestampWrites = nullptr;
-	ComputePassEncoder computePass = encoder.beginComputePass(computePassDesc);
+    ComputePassDescriptor pass_desc;
+    pass_desc.timestampWrites = nullptr;
+    ComputePassEncoder pass   = encoder.beginComputePass(pass_desc);
 
-	// Step 1: timeSpectrum → heightTexture1 (c_bindGroup1: out=1, in=2)
-	uint32_t offset0 = 0;
-	computePass.setPipeline(time_spectrum_pipe);
-	computePass.setBindGroup(0, c_bindGroup1, 1, &offset0);
-	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
+    /* timeSpectrum: evolve h0(k) → h(k,t) and compute slope spectra sx(k), sy(k).
+       Outputs land in height[0], slope_x[0], slope_y[0] (slot 0 = stage 0, time t). */
+    pass.setPipeline(time_spectrum_pipeline);
+    pass.setBindGroup(0, time_spectrum_bind_group, 0, nullptr);
+    pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
 
-	// Step 2: H-FFT, 8 stages ping-pong.
-	// Even stage → c_bindGroup2 (read from 1, write to 2)
-	// Odd  stage → c_bindGroup1 (read from 2, write to 1)
-	// After stage 7 (odd): result in heightTexture1
-	computePass.setPipeline(fft_horizontal_pipe);
-	for (int s = 0; s < TEXTURE_LOG; s++) {
-		uint32_t offset = static_cast<uint32_t>(s) * c_uniformStride;
-		BindGroup& bg = (s % 2 == 0) ? c_bindGroup2 : c_bindGroup1;
-		computePass.setBindGroup(0, bg, 1, &offset);
-		computePass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
-	}
+    /* Horizontal IFFT for all three textures, 8 stages each.
+       Ping-pong index: stage s uses bind_groups[1 - s%2] so output lands in [0] after
+       8 stages (last odd stage writes to [0]). Height and slope share the same pattern. */
+    pass.setPipeline(fft_h_pipeline);
+    for (int s = 0; s < TEXTURE_LOG; s++) {
+        uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
+        pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.setBindGroup(0, sx_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.setBindGroup(0, sy_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+    }
 
-	// Step 3: V-FFT, same ping-pong pattern. Result in heightTexture1 after stage 7.
-	computePass.setPipeline(fft_vertical_pipe);
-	for (int s = 0; s < TEXTURE_LOG; s++) {
-		uint32_t offset = static_cast<uint32_t>(s) * c_uniformStride;
-		BindGroup& bg = (s % 2 == 0) ? c_bindGroup2 : c_bindGroup1;
-		computePass.setBindGroup(0, bg, 1, &offset);
-		computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-	}
+    /* Vertical IFFT — same ping-pong pattern, transposed dispatch dimensions. */
+    pass.setPipeline(fft_v_pipeline);
+    for (int s = 0; s < TEXTURE_LOG; s++) {
+        uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
+        pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.setBindGroup(0, sx_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.setBindGroup(0, sy_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+    }
 
-	computePass.end();
+    pass.end();
 #ifndef WEBGPU_BACKEND_WGPU
-    wgpuComputePassEncoderRelease(computePass);
+    wgpuComputePassEncoderRelease(pass);
 #endif
 
     CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
     queue.submit(commands);
-
 #ifndef WEBGPU_BACKEND_WGPU
     wgpuCommandBufferRelease(commands);
     wgpuCommandEncoderRelease(encoder);
 #endif
 }
 
-RequiredLimits Application::GetRequiredLimits(Adapter adapter) const 
+// ---------------------------------------------------------------------------
+// Device limits
+// ---------------------------------------------------------------------------
+
+RequiredLimits Application::get_required_limits(Adapter adapter) const
 {
-	// Get adapter supported limits, in case we need them
-	SupportedLimits supportedLimits;
-	adapter.getLimits(&supportedLimits);
+    SupportedLimits supported;
+    adapter.getLimits(&supported);
 
-	// Don't forget to = Default
-	RequiredLimits requiredLimits = Default;
-
-	requiredLimits.limits.maxVertexAttributes = 2;
-	requiredLimits.limits.maxVertexBuffers = 1;
-	requiredLimits.limits.maxBufferSize = MESH_SIZE * MESH_SIZE * 5 * sizeof(float);
-	requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
-
-	// There is a maximum of 3 float forwarded from vertex to fragment shader
-	//requiredLimits.limits.maxInterStageShaderComponents = 6;
-
-	// We use at most 1 bind group for now
-	requiredLimits.limits.maxBindGroups = 1;
-	// We use at most 1 uniform buffer per stage
-	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
-	// Uniform structs have a size of maximum 16 float (more than what we need)
-	requiredLimits.limits.maxUniformBufferBindingSize = sizeof(MyUniforms) + sizeof(c_Uniforms);
-
-	// For the depth buffer, we enable textures (up to the size of the window):
-	requiredLimits.limits.maxTextureDimension1D = height;
-	requiredLimits.limits.maxTextureDimension2D = width;
-	requiredLimits.limits.maxTextureArrayLayers = 6;
-
-	// Add the possibility to sample a texture in a shader
-	requiredLimits.limits.maxSampledTexturesPerShaderStage = 4;
-
-	requiredLimits.limits.maxSamplersPerShaderStage = 1;
-
-	// These two limits are different because they are "minimum" limits,
-	// they are the only ones we are may forward from the adapter's supported
-	// limits.
-	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
-	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
-
-	requiredLimits.limits.maxComputeWorkgroupSizeX = 1024;
-	requiredLimits.limits.maxComputeWorkgroupSizeY = 32;
-	requiredLimits.limits.maxComputeWorkgroupSizeZ = 1;
-	requiredLimits.limits.maxComputeInvocationsPerWorkgroup = 1024;
-	return requiredLimits;
+    RequiredLimits limits = Default;
+    limits.limits.maxVertexAttributes       = 2;
+    limits.limits.maxVertexBuffers          = 1;
+    limits.limits.maxBufferSize             = static_cast<uint64_t>(MESH_SIZE) * MESH_SIZE * 5 * sizeof(float);
+    limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
+    limits.limits.maxBindGroups             = 1;
+    limits.limits.maxUniformBuffersPerShaderStage = 1;
+    limits.limits.maxUniformBufferBindingSize     = sizeof(MyUniforms);
+    limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE });
+    limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE });
+    limits.limits.maxTextureArrayLayers     = 6;
+    limits.limits.maxSampledTexturesPerShaderStage  = 4;
+    limits.limits.maxStorageTexturesPerShaderStage  = 3;
+    limits.limits.maxSamplersPerShaderStage         = 1;
+    limits.limits.minUniformBufferOffsetAlignment  = supported.limits.minUniformBufferOffsetAlignment;
+    limits.limits.minStorageBufferOffsetAlignment  = supported.limits.minStorageBufferOffsetAlignment;
+    limits.limits.maxComputeWorkgroupSizeX         = 1024;
+    limits.limits.maxComputeWorkgroupSizeY         = 32;
+    limits.limits.maxComputeWorkgroupSizeZ         = 1;
+    limits.limits.maxComputeInvocationsPerWorkgroup = 1024;
+    return limits;
 }
 
-void Application::InitBuffers() 
+// ---------------------------------------------------------------------------
+// Buffer initialisation
+// ---------------------------------------------------------------------------
+
+void Application::init_buffers()
 {
-	// Define data vectors, but without filling them in
-	std::vector<float> pointData;
-	std::vector<uint16_t> indexData;
+    std::vector<float>    vertices;
+    std::vector<uint16_t> indices;
+    create_geometry(MESH_SIZE, vertices, indices);
 
-	// Here we use the new 'loadGeometry' function:
-	//bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+    index_count = static_cast<uint32_t>(indices.size());
 
-	// Check for errors
-	//if (!success) {
-	//	std::cerr << "Could not load geometry!" << std::endl;
-	//	exit(1);
-	//}
+    BufferDescriptor buf_desc;
+    buf_desc.mappedAtCreation = false;
 
-	CreateGeometry(MESH_SIZE, pointData, indexData);
+    buf_desc.size  = vertices.size() * sizeof(float);
+    buf_desc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
+    vertex_buffer  = device.createBuffer(buf_desc);
+    queue.writeBuffer(vertex_buffer, 0, vertices.data(), buf_desc.size);
 
-	// We now store the index count rather than the vertex count
-	indexCount = static_cast<uint32_t>(indexData.size());
-	vertexCount = static_cast<uint32_t>(pointData.size());
-	
-	// Create vertex buffer
-	BufferDescriptor bufferDesc;
-	bufferDesc.size = pointData.size() * sizeof(float);
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex; // Vertex usage here!
-	bufferDesc.mappedAtCreation = false;
-	pointBuffer = device.createBuffer(bufferDesc);
-	
-	// Upload geometry data to the buffer
-	queue.writeBuffer(pointBuffer, 0, pointData.data(), bufferDesc.size);
+    buf_desc.size  = (indices.size() * sizeof(uint16_t) + 3) & ~3u; // align to 4
+    buf_desc.usage = BufferUsage::CopyDst | BufferUsage::Index;
+    index_buffer   = device.createBuffer(buf_desc);
+    queue.writeBuffer(index_buffer, 0, indices.data(), buf_desc.size);
 
-	// Create index buffer
-	// (we reuse the bufferDesc initialized for the pointBuffer)
-	bufferDesc.size = indexData.size() * sizeof(uint16_t);
-	bufferDesc.size = (bufferDesc.size + 3) & ~3; // round up to the next multiple of 4
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Index;
-	indexBuffer = device.createBuffer(bufferDesc);
+    buf_desc.size  = sizeof(MyUniforms);
+    buf_desc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
+    uniform_buffer = device.createBuffer(buf_desc);
 
-	queue.writeBuffer(indexBuffer, 0, indexData.data(), bufferDesc.size);
-
-	// Create uniform buffer (reusing bufferDesc from other buffer creations)
-	// The buffer will only contain 1 float with the value of uTime
-	// then 3 floats left empty but needed by alignment constraints
-	bufferDesc.size = ((sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT) + sizeof(c_Uniforms);
-
-	// Make sure to flag the buffer as BufferUsage::Uniform
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
-
-	bufferDesc.mappedAtCreation = false;
-	uniformBuffer = device.createBuffer(bufferDesc);
-
-	// Upload uniform data
-	uniforms.model = glm::mat4(1.f);
-	uniforms.view = glm::mat4(1.f);
-	uniforms.projection = glm::mat4(1.f);
-	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
-
-	// Compute uniform buffer: TEXTURE_LOG slots at 256-byte stride for dynamic offsets
-	c_uniformStride = (sizeof(c_Uniforms) + 255u) & ~255u;  // align to 256 (WebGPU min)
-	bufferDesc.size = c_uniformStride * TEXTURE_LOG;
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
-	bufferDesc.mappedAtCreation = false;
-	c_uniformBuffer = device.createBuffer(bufferDesc);
+    /* 256-byte aligned slots for dynamic-offset compute uniforms (one per FFT stage). */
+    compute_uniform_stride = (sizeof(ComputeUniforms) + 255u) & ~255u;
+    buf_desc.size          = compute_uniform_stride * TEXTURE_LOG;
+    buf_desc.usage         = BufferUsage::CopyDst | BufferUsage::Uniform;
+    compute_uniform_buffer = device.createBuffer(buf_desc);
 }
 
-void Application::RebuildRenderBindGroup()
+// ---------------------------------------------------------------------------
+// Bind group management
+// ---------------------------------------------------------------------------
+
+void Application::rebuild_render_bind_group()
 {
-	if (bindGroup) bindGroup.release();
+    if (bind_group) bind_group.release();
 
-	std::vector<BindGroupEntry> bindings(4);
-	bindings[0].binding = 0;
-	bindings[0].buffer  = uniformBuffer;
-	bindings[0].offset  = 0;
-	bindings[0].size    = sizeof(MyUniforms);
+    std::vector<BindGroupEntry> entries(6, Default);
+    entries[0].binding = 0;
+    entries[0].buffer  = uniform_buffer;
+    entries[0].offset  = 0;
+    entries[0].size    = sizeof(MyUniforms);
 
-	bindings[1].binding     = 1;
-	bindings[1].textureView = heightTextureView1;
+    entries[1].binding     = 1;
+    entries[1].textureView = height_texture_views[0];
 
-	bindings[2].binding = 2;
-	bindings[2].sampler = sampler;
+    entries[2].binding = 2;
+    entries[2].sampler = sampler;
 
-	bindings[3].binding     = 3;
-	bindings[3].textureView = cubemapTextureView;
+    entries[3].binding     = 3;
+    entries[3].textureView = cubemap_texture_view;
 
-	BindGroupDescriptor desc;
-	desc.layout     = bindGroupLayout;
-	desc.entryCount = static_cast<uint32_t>(bindings.size());
-	desc.entries    = bindings.data();
-	bindGroup = device.createBindGroup(desc);
+    entries[4].binding     = 4;
+    entries[4].textureView = slope_x_texture_views[0];
+
+    entries[5].binding     = 5;
+    entries[5].textureView = slope_y_texture_views[0];
+
+    BindGroupDescriptor desc;
+    desc.layout     = bind_group_layout;
+    desc.entryCount = static_cast<uint32_t>(entries.size());
+    desc.entries    = entries.data();
+    bind_group      = device.createBindGroup(desc);
 }
 
-void Application::InitBindGroups()
+void Application::init_bind_groups()
 {
-	// compute bind groups only — render bind group is built in RebuildRenderBindGroup()
-	std::vector<BindGroupEntry> bindings;
-	bindings.clear();
-	bindings.emplace_back();
-	bindings[0].binding = 4;
-	bindings[0].buffer  = c_uniformBuffer;
-	bindings[0].offset  = 0;
-	bindings[0].size    = sizeof(c_Uniforms);
+    // --- time_spectrum bind group ---
+    {
+        std::vector<BindGroupEntry> e(6, Default);
+        e[0].binding = 0;  e[0].buffer      = compute_uniform_buffer;
+                           e[0].offset       = 0;
+                           e[0].size         = sizeof(ComputeUniforms);
+        e[1].binding = 1;  e[1].textureView  = height_texture_views[0];   // h_out
+        e[2].binding = 2;  e[2].textureView  = spectrum_texture_view;
+        e[3].binding = 3;  e[3].textureView  = k_data_texture_view;
+        e[4].binding = 4;  e[4].textureView  = slope_x_texture_views[0];  // slope_x_out
+        e[5].binding = 5;  e[5].textureView  = slope_y_texture_views[0];  // slope_y_out
 
-	bindings.emplace_back();
-	bindings[1].binding     = 5;
-	bindings[1].textureView = heightTextureView1;  // outTexture (ping)
+        BindGroupDescriptor desc;
+        desc.layout     = time_spectrum_bgl;
+        desc.entryCount = static_cast<uint32_t>(e.size());
+        desc.entries    = e.data();
+        time_spectrum_bind_group = device.createBindGroup(desc);
+    }
 
-	bindings.emplace_back();
-	bindings[2].binding     = 6;
-	bindings[2].textureView = heightTextureView2;  // inTexture  (ping)
+    // --- FFT bind groups (height, slope_x, slope_y — ping-pong pairs) ---
+    {
+        /* 4-entry template: uniform(0), out(1), in(2), butterfly(3) */
+        std::vector<BindGroupEntry> e(4, Default);
+        e[0].binding = 0;  e[0].buffer     = compute_uniform_buffer;
+                           e[0].offset      = 0;
+                           e[0].size        = sizeof(ComputeUniforms);
+        e[3].binding = 3;  e[3].textureView = butterfly_texture_view;
 
-	bindings.emplace_back();
-	bindings[3].binding     = 7;
-	bindings[3].textureView = spectrumTextureView;
+        BindGroupDescriptor desc;
+        desc.layout     = fft_bgl;
+        desc.entryCount = static_cast<uint32_t>(e.size());
+        desc.entries    = e.data();
 
-	bindings.emplace_back();
-	bindings[4].binding     = 8;
-	bindings[4].textureView = butterflyTextureView;
+        auto make_pair = [&](wgpu::TextureView* views, wgpu::BindGroup* groups) {
+            e[1].binding = 1;  e[1].textureView = views[0];
+            e[2].binding = 2;  e[2].textureView = views[1];
+            groups[0] = device.createBindGroup(desc);   /* out=[0], in=[1] */
 
-	bindings.emplace_back();
-	bindings[5].binding     = 9;
-	bindings[5].textureView = kDataTextureView;
-	
-	BindGroupDescriptor c_bindGroupDesc;
-	c_bindGroupDesc.layout = c_bindGroupLayout;
-	c_bindGroupDesc.entryCount = (uint32_t)bindings.size();
-	c_bindGroupDesc.entries = bindings.data();
-	c_bindGroup1 = device.createBindGroup(c_bindGroupDesc);
+            e[1].textureView = views[1];
+            e[2].textureView = views[0];
+            groups[1] = device.createBindGroup(desc);   /* out=[1], in=[0] */
+        };
 
-	bindings[1].textureView = heightTextureView2;
-	bindings[2].textureView = heightTextureView1;
-	c_bindGroupDesc.entries = bindings.data();
-	c_bindGroup2 = device.createBindGroup(c_bindGroupDesc);
+        make_pair(height_texture_views,  h_fft_bind_groups);
+        make_pair(slope_x_texture_views, sx_fft_bind_groups);
+        make_pair(slope_y_texture_views, sy_fft_bind_groups);
+    }
 }
 
-void Application::InitCubemap()
-{
-	namespace fs = std::filesystem;
-	for (auto const& entry : fs::directory_iterator(fs::path(RESOURCE_DIR "/Cubemap"))) {
-		if (entry.path().extension() == ".png")
-			cubemapPaths.push_back(entry.path().string());
-	}
-	std::sort(cubemapPaths.begin(), cubemapPaths.end());
+// ---------------------------------------------------------------------------
+// Texture initialisation
+// ---------------------------------------------------------------------------
 
-	if (!cubemapPaths.empty())
-		LoadCubemap(0);
+void Application::init_textures()
+{
+    using wgpu::TextureUsage, wgpu::TextureFormat;
+
+    const WGPUTextureUsageFlags ping_pong_usage = TextureUsage::TextureBinding | TextureUsage::StorageBinding;
+    const WGPUTextureUsageFlags upload_usage    = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+
+    /* Ping-pong height-field textures for the IFFT pipeline. */
+    for (int i = 0; i < 2; i++) {
+        height_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                    TextureFormat::RGBA32Float, ping_pong_usage);
+        height_texture_views[i] = create_view_2d(height_textures[i], TextureFormat::RGBA32Float);
+    }
+
+    /* Ping-pong slope textures for spectral-derivative normals (∂h/∂x and ∂h/∂y). */
+    for (int i = 0; i < 2; i++) {
+        slope_x_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                      TextureFormat::RGBA32Float, ping_pong_usage);
+        slope_x_texture_views[i] = create_view_2d(slope_x_textures[i], TextureFormat::RGBA32Float);
+        slope_y_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                      TextureFormat::RGBA32Float, ping_pong_usage);
+        slope_y_texture_views[i] = create_view_2d(slope_y_textures[i], TextureFormat::RGBA32Float);
+    }
+
+    /* Initial h0(k) spectrum — generated once on the CPU, uploaded, then read-only. */
+    spectrum_texture      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                              TextureFormat::RG32Float, upload_usage);
+    spectrum_texture_view = create_view_2d(spectrum_texture, TextureFormat::RG32Float);
+
+    /* Wave-vector and dispersion data (kx, ky, omega, unused). */
+    k_data_texture      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                            TextureFormat::RGBA32Float, upload_usage);
+    k_data_texture_view = create_view_2d(k_data_texture, TextureFormat::RGBA32Float);
+
+    /* Generate and upload spectrum + k-data. */
+    std::vector<float> spectrum, k_data;
+    fill_textures(spectrum, k_data);
+
+    auto upload = [&](Texture tex, const void* data, size_t bytes,
+                      uint32_t bytes_per_row, uint32_t rows) {
+        ImageCopyTexture dst = {};
+        dst.texture  = tex;
+        dst.mipLevel = 0;
+        dst.origin   = { 0, 0, 0 };
+        dst.aspect   = TextureAspect::All;
+        TextureDataLayout layout = {};
+        layout.bytesPerRow  = bytes_per_row;
+        layout.rowsPerImage = rows;
+        Extent3D extent = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
+        queue.writeTexture(dst, data, bytes, layout, extent);
+    };
+
+    upload(spectrum_texture, spectrum.data(), spectrum.size() * sizeof(float),
+           TEXTURE_SIZE * 2 * sizeof(float), TEXTURE_SIZE);
+    upload(k_data_texture, k_data.data(), k_data.size() * sizeof(float),
+           TEXTURE_SIZE * 4 * sizeof(float), TEXTURE_SIZE);
+
+    /* Butterfly twiddle table: (N/2) × log2(N), RGBA32Float.
+       Each texel (x, stage) = (tw.re, tw.im, a_idx, b_idx) for DIT IFFT. */
+    butterfly_texture      = create_texture_2d(device, TEXTURE_SIZE / 2, TEXTURE_LOG,
+                                               TextureFormat::RGBA32Float, upload_usage);
+    butterfly_texture_view = create_view_2d(butterfly_texture, TextureFormat::RGBA32Float);
+
+    {
+        const float pi = static_cast<float>(std::numbers::pi);
+        std::vector<float> bfly(TEXTURE_SIZE / 2 * TEXTURE_LOG * 4);
+        for (int s = 0; s < TEXTURE_LOG; s++) {
+            int half_span = 1 << s;
+            int span      = 2 * half_span;
+            for (int x = 0; x < TEXTURE_SIZE / 2; x++) {
+                int local_j = x % half_span;
+                int group   = x / half_span;
+                int a_idx   = group * span + local_j;
+                int b_idx   = a_idx + half_span;
+                int k       = local_j * (TEXTURE_SIZE / span);
+                float angle = +2.f * pi * k / TEXTURE_SIZE; // + sign = IFFT
+                int   idx   = (x + s * (TEXTURE_SIZE / 2)) * 4;
+                bfly[idx + 0] = std::cos(angle); // tw.re
+                bfly[idx + 1] = std::sin(angle); // tw.im
+                bfly[idx + 2] = static_cast<float>(a_idx);
+                bfly[idx + 3] = static_cast<float>(b_idx);
+            }
+        }
+        ImageCopyTexture dst = {};
+        dst.texture  = butterfly_texture;
+        dst.mipLevel = 0;
+        dst.origin   = { 0, 0, 0 };
+        dst.aspect   = TextureAspect::All;
+        TextureDataLayout layout = {};
+        layout.bytesPerRow  = (TEXTURE_SIZE / 2) * 4 * sizeof(float);
+        layout.rowsPerImage = TEXTURE_LOG;
+        Extent3D extent = { static_cast<uint32_t>(TEXTURE_SIZE / 2), TEXTURE_LOG, 1 };
+        queue.writeTexture(dst, bfly.data(), bfly.size() * sizeof(float), layout, extent);
+    }
+
+    /* Sampler shared by both the water shader and the skybox. */
+    SamplerDescriptor sampler_desc;
+    sampler_desc.addressModeU  = AddressMode::ClampToEdge;
+    sampler_desc.addressModeV  = AddressMode::ClampToEdge;
+    sampler_desc.addressModeW  = AddressMode::ClampToEdge;
+    sampler_desc.magFilter     = FilterMode::Linear;
+    sampler_desc.minFilter     = FilterMode::Linear;
+    sampler_desc.mipmapFilter  = MipmapFilterMode::Linear;
+    sampler_desc.lodMinClamp   = 0.f;
+    sampler_desc.lodMaxClamp   = 1.f;
+    sampler_desc.compare       = CompareFunction::Undefined;
+    sampler_desc.maxAnisotropy = 1;
+    sampler = device.createSampler(sampler_desc);
 }
 
-void Application::LoadCubemap(int index)
+// ---------------------------------------------------------------------------
+// Cubemap loading
+// ---------------------------------------------------------------------------
+
+void Application::init_cubemap()
 {
-	if (index < 0 || index >= static_cast<int>(cubemapPaths.size())) return;
-	currentCubemapIndex = index;
+    namespace fs = std::filesystem;
+    for (auto const& entry : fs::directory_iterator(fs::path(RESOURCE_DIR "/Cubemap"))) {
+        if (entry.path().extension() == ".png")
+            cubemap_paths.push_back(entry.path().string());
+    }
+    std::sort(cubemap_paths.begin(), cubemap_paths.end());
 
-	std::vector<uint8_t> facePixels;
-	int faceSize = 0;
-	if (!ResourceManager::loadCubemapCross(cubemapPaths[index], facePixels, faceSize)) {
-		std::cerr << "Failed to load cubemap: " << cubemapPaths[index] << std::endl;
-		return;
-	}
-
-	if (cubemapTextureView) cubemapTextureView.release();
-	if (cubemapTexture) { cubemapTexture.destroy(); cubemapTexture.release(); }
-
-	TextureDescriptor texDesc;
-	texDesc.dimension      = TextureDimension::_2D;
-	texDesc.size           = { static_cast<uint32_t>(faceSize), static_cast<uint32_t>(faceSize), 6 };
-	texDesc.mipLevelCount  = 1;
-	texDesc.sampleCount    = 1;
-	texDesc.format         = TextureFormat::RGBA8Unorm;
-	texDesc.usage          = TextureUsage::TextureBinding | TextureUsage::CopyDst;
-	texDesc.viewFormatCount = 0;
-	texDesc.viewFormats    = nullptr;
-	cubemapTexture = device.createTexture(texDesc);
-
-	TextureViewDescriptor viewDesc;
-	viewDesc.aspect          = TextureAspect::All;
-	viewDesc.baseArrayLayer  = 0;
-	viewDesc.arrayLayerCount = 6;
-	viewDesc.baseMipLevel    = 0;
-	viewDesc.mipLevelCount   = 1;
-	viewDesc.dimension       = TextureViewDimension::Cube;
-	viewDesc.format          = TextureFormat::RGBA8Unorm;
-	cubemapTextureView = cubemapTexture.createView(viewDesc);
-
-	const int bytesPerFace = faceSize * faceSize * 4;
-	for (int face = 0; face < 6; face++) {
-		ImageCopyTexture dst = {};
-		dst.texture  = cubemapTexture;
-		dst.mipLevel = 0;
-		dst.origin   = { 0, 0, static_cast<uint32_t>(face) };
-		dst.aspect   = TextureAspect::All;
-
-		TextureDataLayout textLayout = {};
-		textLayout.offset       = 0;
-		textLayout.bytesPerRow  = static_cast<uint32_t>(faceSize) * 4;
-		textLayout.rowsPerImage = static_cast<uint32_t>(faceSize);
-
-		Extent3D extent = { static_cast<uint32_t>(faceSize), static_cast<uint32_t>(faceSize), 1 };
-		queue.writeTexture(dst, facePixels.data() + face * bytesPerFace,
-		                   static_cast<size_t>(bytesPerFace), textLayout, extent);
-	}
-
-	RebuildRenderBindGroup();
+    if (!cubemap_paths.empty())
+        load_cubemap(0);
 }
 
-void Application::InitTextures() 
+void Application::load_cubemap(int index)
 {
-	// fft ping pongs
-	TextureDescriptor textureDesc;
-	textureDesc.dimension = TextureDimension::_2D;
-	textureDesc.size = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
-	textureDesc.mipLevelCount = 1;
-	textureDesc.sampleCount = 1;
-	textureDesc.format = TextureFormat::RGBA32Float;
-	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::StorageBinding;
-	textureDesc.viewFormatCount = 0;
-	textureDesc.viewFormats = nullptr;
+    if (index < 0 || index >= static_cast<int>(cubemap_paths.size())) return;
+    cubemap_index = index;
 
-	heightTexture1 = device.createTexture(textureDesc);
-	heightTexture2 = device.createTexture(textureDesc);
+    std::vector<uint8_t> face_pixels;
+    int face_size = 0;
+    if (!ResourceManager::load_cubemap_cross(cubemap_paths[index], face_pixels, face_size)) {
+        std::cerr << "Failed to load cubemap: " << cubemap_paths[index] << '\n';
+        return;
+    }
 
-	
-	TextureViewDescriptor textureViewDesc;
-	textureViewDesc.aspect = TextureAspect::All;
-	textureViewDesc.baseArrayLayer = 0;
-	textureViewDesc.arrayLayerCount = 1;
-	textureViewDesc.baseMipLevel = 0;
-	textureViewDesc.mipLevelCount = 1;
-	textureViewDesc.dimension = TextureViewDimension::_2D;
-	textureViewDesc.format = textureDesc.format;
-	heightTextureView1 = heightTexture1.createView(textureViewDesc);
-	heightTextureView2 = heightTexture2.createView(textureViewDesc);
-	
-	// h0 spectrum
-	textureDesc.format = TextureFormat::RG32Float;
-	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
-	spectrumTexture = device.createTexture(textureDesc);
+    if (cubemap_texture_view) cubemap_texture_view.release();
+    if (cubemap_texture)      { cubemap_texture.destroy(); cubemap_texture.release(); }
 
-	textureViewDesc.format = textureDesc.format;
-	spectrumTextureView = spectrumTexture.createView(textureViewDesc);
-	
-	// k_data
-	textureDesc.format = TextureFormat::RGBA32Float;
-	kDataTexture = device.createTexture(textureDesc);
-	textureViewDesc.format = textureDesc.format;
-	kDataTextureView = kDataTexture.createView(textureViewDesc);
-	
-	std::vector<float> spectrum;
-	std::vector<float> k_data;
-	fillTextures(spectrum, k_data);
+    TextureDescriptor tex_desc;
+    tex_desc.dimension       = TextureDimension::_2D;
+    tex_desc.size            = { static_cast<uint32_t>(face_size), static_cast<uint32_t>(face_size), 6 };
+    tex_desc.mipLevelCount   = 1;
+    tex_desc.sampleCount     = 1;
+    tex_desc.format          = TextureFormat::RGBA8Unorm;
+    tex_desc.usage           = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+    tex_desc.viewFormatCount = 0;
+    tex_desc.viewFormats     = nullptr;
+    cubemap_texture = device.createTexture(tex_desc);
 
-	ImageCopyTexture destination;
-	destination.texture = spectrumTexture;
-	destination.mipLevel = 0;
-	destination.origin = { 0, 0, 0 };
-	destination.aspect = TextureAspect::All;
+    TextureViewDescriptor view_desc;
+    view_desc.aspect          = TextureAspect::All;
+    view_desc.baseArrayLayer  = 0;
+    view_desc.arrayLayerCount = 6;
+    view_desc.baseMipLevel    = 0;
+    view_desc.mipLevelCount   = 1;
+    view_desc.dimension       = TextureViewDimension::Cube;
+    view_desc.format          = TextureFormat::RGBA8Unorm;
+    cubemap_texture_view      = cubemap_texture.createView(view_desc);
 
-	TextureDataLayout source;
-	source.offset = 0;
-	source.bytesPerRow = TEXTURE_SIZE * 2 * sizeof(float);
-	source.rowsPerImage = TEXTURE_SIZE;
+    const int bytes_per_face = face_size * face_size * 4;
+    for (int face = 0; face < 6; face++) {
+        ImageCopyTexture dst = {};
+        dst.texture  = cubemap_texture;
+        dst.mipLevel = 0;
+        dst.origin   = { 0, 0, static_cast<uint32_t>(face) };
+        dst.aspect   = TextureAspect::All;
 
-	queue.writeTexture(destination, spectrum.data(), spectrum.size() * sizeof(float), source, textureDesc.size);
+        TextureDataLayout layout = {};
+        layout.bytesPerRow  = static_cast<uint32_t>(face_size) * 4;
+        layout.rowsPerImage = static_cast<uint32_t>(face_size);
 
-	destination.texture = kDataTexture;
-	source.bytesPerRow = TEXTURE_SIZE * 4 * sizeof(float);
-	queue.writeTexture(destination, k_data.data(), k_data.size() * sizeof(float), source, textureDesc.size);
+        Extent3D extent = { static_cast<uint32_t>(face_size), static_cast<uint32_t>(face_size), 1 };
+        queue.writeTexture(dst, face_pixels.data() + face * bytes_per_face,
+                           static_cast<size_t>(bytes_per_face), layout, extent);
+    }
 
-	// Butterfly texture: (N/2) x log2(N), RGBA32Float
-	// Each texel (x, stage) = (tw.re, tw.im, a_idx, b_idx) for DIT FFT
-	textureDesc.size = { TEXTURE_SIZE / 2, TEXTURE_LOG, 1 };
-	textureDesc.format = TextureFormat::RGBA32Float;
-	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
-	butterflyTexture = device.createTexture(textureDesc);
-	textureViewDesc.format = textureDesc.format;
-	butterflyTextureView = butterflyTexture.createView(textureViewDesc);
-
-	{
-		const float pi = static_cast<float>(std::numbers::pi);
-		std::vector<float> bfly(TEXTURE_SIZE / 2 * TEXTURE_LOG * 4);
-		for (int s = 0; s < TEXTURE_LOG; s++) {
-			int halfSpan = 1 << s;
-			int span     = 2 * halfSpan;
-			for (int x = 0; x < TEXTURE_SIZE / 2; x++) {
-				int local_j = x % halfSpan;
-				int group   = x / halfSpan;
-				int a_idx   = group * span + local_j;
-				int b_idx   = a_idx + halfSpan;
-				int k       = local_j * (TEXTURE_SIZE / span);
-				float angle = +2.0f * pi * k / TEXTURE_SIZE;
-				int i = (x + s * (TEXTURE_SIZE / 2)) * 4;
-				bfly[i+0] = std::cos(angle);
-				bfly[i+1] = std::sin(angle);
-				bfly[i+2] = static_cast<float>(a_idx);
-				bfly[i+3] = static_cast<float>(b_idx);
-			}
-		}
-		ImageCopyTexture bflyDest = {};
-		bflyDest.texture  = butterflyTexture;
-		bflyDest.mipLevel = 0;
-		bflyDest.origin   = { 0, 0, 0 };
-		bflyDest.aspect   = TextureAspect::All;
-		TextureDataLayout bflySrc = {};
-		bflySrc.offset       = 0;
-		bflySrc.bytesPerRow  = (TEXTURE_SIZE / 2) * 4 * sizeof(float);
-		bflySrc.rowsPerImage = TEXTURE_LOG;
-		queue.writeTexture(bflyDest, bfly.data(), bfly.size() * sizeof(float), bflySrc, textureDesc.size);
-	}
-
-	// Create a sampler
-	SamplerDescriptor samplerDesc;
-	samplerDesc.addressModeU = AddressMode::ClampToEdge;
-	samplerDesc.addressModeV = AddressMode::ClampToEdge;
-	samplerDesc.addressModeW = AddressMode::ClampToEdge;
-	samplerDesc.magFilter = FilterMode::Linear;
-	samplerDesc.minFilter = FilterMode::Linear;
-	samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
-	samplerDesc.lodMinClamp = 0.0f;
-	samplerDesc.lodMaxClamp = 1.0f;
-	samplerDesc.compare = CompareFunction::Undefined;
-	samplerDesc.maxAnisotropy = 1;
-	sampler = device.createSampler(samplerDesc);
+    rebuild_render_bind_group();
 }

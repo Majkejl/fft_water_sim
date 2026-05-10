@@ -9,7 +9,7 @@ struct c_Uniforms
 @group(0) @binding(1) var outTexture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var inTexture: texture_2d<f32>;
 @group(0) @binding(4) var spectrumTexture: texture_2d<f32>;
-@group(0) @binding(5) var<storage, read> w_buff: array<f32>;
+@group(0) @binding(5) var butterflyTex: texture_2d<f32>;
 @group(0) @binding(6) var kDataTexture: texture_2d<f32>;
 
 
@@ -26,10 +26,6 @@ struct c_Uniforms
 //     }
 //     textureStore(outTexture, vec2i(id.xy), vec4f(height + 0.5));
 // }
-
-fn w(x: u32) -> vec2f {
-    return vec2f(w_buff[2 * x], w_buff[2 * x + 1]);
-}
 
 fn reverse(x: u32, log2n: u32) -> u32 {
     return reverseBits(x) >> (32u - log2n);
@@ -127,56 +123,50 @@ fn timeSpectrum(@builtin(global_invocation_id) id : vec3<u32>) {
 
 }
 
-@compute @workgroup_size(32, 32, 1) // TODO: change size probably in every @compute
-fn fft_horizontal(@builtin(global_invocation_id) id : vec3<u32>) {
-    
-    // let iid = vec3<i32>(id);
-    // let data = textureLoad(PrecomputedData, vec2<i32>(params.Step, iid.x), 0);
-	// let inputsIndices = vec2<i32>(data.ba);
+// id.x = butterfly index 0..N/2-1, id.y = row 0..N-1
+@compute @workgroup_size(32, 32, 1)
+fn fft_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
+    let stage  = u.stage;
+    let data   = textureLoad(butterflyTex, vec2i(i32(id.x), i32(stage)), 0);
+    let tw     = data.rg;
+    let writ_a = i32(data.b + 0.5);
+    let writ_b = i32(data.a + 0.5);
 
-    // let input0 = textureLoad(InputBuffer, vec2<i32>(inputsIndices.x, iid.y), 0);
-    // let input1 = textureLoad(InputBuffer, vec2<i32>(inputsIndices.y, iid.y), 0);
+    let log2n  = 8u;
+    let read_a = select(writ_a, i32(reverse(u32(writ_a), log2n)), stage == 0u);
+    let read_b = select(writ_b, i32(reverse(u32(writ_b), log2n)), stage == 0u);
 
-    // textureStore(OutputBuffer, iid.xy, vec4<f32>(
-    //     input0.xy + complexMult(vec2<f32>(data.r, -data.g), input1.xy), 0., 0.
-    // ));
+    let row = i32(id.y);
+    let a   = textureLoad(inTexture, vec2i(read_a, row), 0).rg;
+    let b   = textureLoad(inTexture, vec2i(read_b, row), 0).rg;
+
+    let out_a = a + complex_mul(tw, b);
+    let out_b = a - complex_mul(tw, b);
+
+    textureStore(outTexture, vec2i(writ_a, row), vec4f(out_a, 0.0, 1.0));
+    textureStore(outTexture, vec2i(writ_b, row), vec4f(out_b, 0.0, 1.0));
 }
 
-@compute @workgroup_size(32, 32, 1) // TODO: change size probably in every @compute
-fn fft_vertical(@builtin(global_invocation_id) id : vec3<u32>) {
-    let N = u.N;
-    let stage = u.stage;
+// id.x = col 0..N-1, id.y = butterfly index 0..N/2-1
+@compute @workgroup_size(32, 32, 1)
+fn fft_vertical(@builtin(global_invocation_id) id: vec3<u32>) {
+    let stage  = u.stage;
+    let data   = textureLoad(butterflyTex, vec2i(i32(id.y), i32(stage)), 0);
+    let tw     = data.rg;
+    let writ_a = i32(data.b + 0.5);
+    let writ_b = i32(data.a + 0.5);
 
-    // column-major traversal (swap roles)
-    let i = id.y + id.x * N;
+    let log2n  = 8u;
+    let read_a = select(writ_a, i32(reverse(u32(writ_a), log2n)), stage == 0u);
+    let read_b = select(writ_b, i32(reverse(u32(writ_b), log2n)), stage == 0u);
 
-    let stride = 1u << stage;
-    let halfSpan = stride;
+    let col = i32(id.x);
+    let a   = textureLoad(inTexture, vec2i(col, read_a), 0).rg;
+    let b   = textureLoad(inTexture, vec2i(col, read_b), 0).rg;
 
-    let group = (i / (2u * halfSpan)) * (2u * halfSpan);
-    let pos   = i % (2u * halfSpan);
+    let out_a = a + complex_mul(tw, b);
+    let out_b = a - complex_mul(tw, b);
 
-    let a_i = group + (pos % halfSpan);
-    let b_i = a_i + halfSpan;
-
-    // NOTE: swapped addressing (column FFT)
-    let x_a = a_i / N;
-    let y_a = a_i % N;
-
-    let x_b = b_i / N;
-    let y_b = b_i % N;
-
-    let a = textureLoad(inTexture, vec2<u32>(x_a, y_a), 0).rg;
-    let b = textureLoad(inTexture, vec2<u32>(x_b, y_b), 0).rg;
-
-    // twiddle factor W_N^k
-    let tw = w((pos % halfSpan) * (N / (2u * halfSpan)));
-
-    let b_tw = complex_mul(b, tw);
-
-    let out_a = a + b_tw;
-    let out_b = a - b_tw;
-
-    textureStore(outTexture, vec2(x_a, y_a), vec4f(out_a, 0.0, 1.0));
-    textureStore(outTexture, vec2(x_b, y_b), vec4f(out_b, 0.0, 1.0));
+    textureStore(outTexture, vec2i(col, writ_a), vec4f(out_a, 0.0, 1.0));
+    textureStore(outTexture, vec2i(col, writ_b), vec4f(out_b, 0.0, 1.0));
 }

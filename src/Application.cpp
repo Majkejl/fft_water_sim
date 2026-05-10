@@ -6,6 +6,7 @@
 // #include "PerlinNoise.hpp"
 #include <random>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 
 using namespace wgpu;
@@ -288,9 +289,6 @@ void Application::MainLoop()
 {
 	glfwPollEvents();
 
-	c_uniforms.time = static_cast<float>(glfwGetTime());
-	c_uniforms.N = TEXTURE_SIZE;
-	queue.writeBuffer(uniformBuffer, (sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT, &c_uniforms, sizeof(c_Uniforms));
 	RunCompute();
 
 	// Update uniform buffer
@@ -635,6 +633,7 @@ void Application::InitCompute()
 	uniformBindingLayout.binding = 0;
 	uniformBindingLayout.visibility = ShaderStage::Compute;
 	uniformBindingLayout.buffer.type = BufferBindingType::Uniform;
+	uniformBindingLayout.buffer.hasDynamicOffset = true;
 	uniformBindingLayout.buffer.minBindingSize = sizeof(c_Uniforms);
 
 	BindGroupLayoutEntry& textureOutBindingLayout = bindingLayoutEntries[1];
@@ -656,11 +655,11 @@ void Application::InitCompute()
 	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
-	BindGroupLayoutEntry& wBufferLayout = bindingLayoutEntries[4];
-	wBufferLayout.binding = 5;
-	wBufferLayout.visibility = ShaderStage::Compute;
-	wBufferLayout.buffer.type = BufferBindingType::ReadOnlyStorage;
-	wBufferLayout.buffer.minBindingSize = TEXTURE_SIZE * sizeof(float);
+	BindGroupLayoutEntry& butterflyBindingLayout = bindingLayoutEntries[4];
+	butterflyBindingLayout.binding = 5;
+	butterflyBindingLayout.visibility = ShaderStage::Compute;
+	butterflyBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
+	butterflyBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	BindGroupLayoutEntry& kDataBindingLayout = bindingLayoutEntries[5];
 	kDataBindingLayout.binding = 6;
@@ -690,54 +689,73 @@ void Application::InitCompute()
 	compPipeline = device.createComputePipeline(computePipelineDesc);
 	
 	computePipelineDesc.compute.entryPoint = "timeSpectrum";
-	precompute_pipe = device.createComputePipeline(computePipelineDesc);
-
-	computePipelineDesc.compute.entryPoint = "timeSpectrum";
 	time_spectrum_pipe = device.createComputePipeline(computePipelineDesc);
-	
-	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+
+	computePipelineDesc.compute.entryPoint = "fft_horizontal";
 	fft_horizontal_pipe = device.createComputePipeline(computePipelineDesc);
-	
-	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+
+	computePipelineDesc.compute.entryPoint = "fft_vertical";
 	fft_vertical_pipe = device.createComputePipeline(computePipelineDesc);
 
 }
 
-void Application::RunCompute() 
+void Application::RunCompute()
 {
-    // Initialize a command encoder
+	// Pre-fill all TEXTURE_LOG stage slots in c_uniformBuffer before encoding.
+	// Each slot is at offset s * c_uniformStride; dynamic offsets select the right slot per dispatch.
+	float currentTime = static_cast<float>(glfwGetTime());
+	std::vector<uint8_t> ubuf(c_uniformStride * TEXTURE_LOG, 0);
+	for (int s = 0; s < TEXTURE_LOG; s++) {
+		c_Uniforms cu{ currentTime, static_cast<unsigned>(s), TEXTURE_SIZE, 0.f };
+		memcpy(ubuf.data() + s * c_uniformStride, &cu, sizeof(c_Uniforms));
+	}
+	queue.writeBuffer(c_uniformBuffer, 0, ubuf.data(), ubuf.size());
+
     CommandEncoderDescriptor encoderDesc = Default;
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
-	// Create and use compute pass here!
-	// Create compute pass
 	ComputePassDescriptor computePassDesc;
 	computePassDesc.timestampWrites = nullptr;
 	ComputePassEncoder computePass = encoder.beginComputePass(computePassDesc);
 
-	// Use compute pass
+	// Step 1: timeSpectrum → heightTexture1 (c_bindGroup1: out=1, in=2)
+	uint32_t offset0 = 0;
 	computePass.setPipeline(time_spectrum_pipe);
-	computePass.setBindGroup(0, c_bindGroup1, 0, nullptr);
+	computePass.setBindGroup(0, c_bindGroup1, 1, &offset0);
 	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
 
-	// Finalize compute pass
-	computePass.end();
+	// Step 2: H-FFT, 8 stages ping-pong.
+	// Even stage → c_bindGroup2 (read from 1, write to 2)
+	// Odd  stage → c_bindGroup1 (read from 2, write to 1)
+	// After stage 7 (odd): result in heightTexture1
+	computePass.setPipeline(fft_horizontal_pipe);
+	for (int s = 0; s < TEXTURE_LOG; s++) {
+		uint32_t offset = static_cast<uint32_t>(s) * c_uniformStride;
+		BindGroup& bg = (s % 2 == 0) ? c_bindGroup2 : c_bindGroup1;
+		computePass.setBindGroup(0, bg, 1, &offset);
+		computePass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+	}
 
-	// Clean up
+	// Step 3: V-FFT, same ping-pong pattern. Result in heightTexture1 after stage 7.
+	computePass.setPipeline(fft_vertical_pipe);
+	for (int s = 0; s < TEXTURE_LOG; s++) {
+		uint32_t offset = static_cast<uint32_t>(s) * c_uniformStride;
+		BindGroup& bg = (s % 2 == 0) ? c_bindGroup2 : c_bindGroup1;
+		computePass.setBindGroup(0, bg, 1, &offset);
+		computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+	}
+
+	computePass.end();
 #ifndef WEBGPU_BACKEND_WGPU
     wgpuComputePassEncoderRelease(computePass);
 #endif
 
-
-    // Encode and submit the GPU commands
     CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
     queue.submit(commands);
 
-    // Clean up
 #ifndef WEBGPU_BACKEND_WGPU
     wgpuCommandBufferRelease(commands);
     wgpuCommandEncoderRelease(encoder);
-    wgpuQueueRelease(queue);
 #endif
 }
 
@@ -845,26 +863,12 @@ void Application::InitBuffers()
 	uniforms.projection = glm::mat4(1.f);
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
-	// Flat W_N^k table: w[k] = e^{-2πik/N} for k = 0..N/2-1
-	bufferDesc.size = TEXTURE_SIZE * sizeof(float); // N/2 complex pairs = N floats
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Storage;
+	// Compute uniform buffer: TEXTURE_LOG slots at 256-byte stride for dynamic offsets
+	c_uniformStride = (sizeof(c_Uniforms) + 255u) & ~255u;  // align to 256 (WebGPU min)
+	bufferDesc.size = c_uniformStride * TEXTURE_LOG;
+	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
 	bufferDesc.mappedAtCreation = false;
-	w_buffer = device.createBuffer(bufferDesc);
-
-	std::vector<float> w_n(TEXTURE_SIZE); // N floats = N/2 complex pairs
-	for (int k = 0; k < TEXTURE_SIZE / 2; k++) {
-		float angle = -2.0f * static_cast<float>(std::numbers::pi) * k / TEXTURE_SIZE;
-		w_n[2*k + 0] = std::cos(angle);
-		w_n[2*k + 1] = std::sin(angle);
-	}
-
-	queue.writeBuffer(w_buffer, 0, w_n.data(), bufferDesc.size);
-
-	// bufferDesc.size = TEXTURE_SIZE * sizeof(unsigned);
-	// bit_reverse_buffer = device.createBuffer(bufferDesc);
-
-	// std::vector<unsigned> bits(TEXTURE_SIZE);
-
+	c_uniformBuffer = device.createBuffer(bufferDesc);
 }
 
 void Application::InitBindGroups() 
@@ -893,8 +897,8 @@ void Application::InitBindGroups()
 	bindings.clear();
 	bindings.emplace_back();
 	bindings[0].binding = 0;
-	bindings[0].buffer = uniformBuffer;
-	bindings[0].offset = (sizeof(MyUniforms) + ALIGNMENT) & ~ALIGNMENT;
+	bindings[0].buffer = c_uniformBuffer;
+	bindings[0].offset = 0;
 	bindings[0].size = sizeof(c_Uniforms);
 	
 	
@@ -912,9 +916,7 @@ void Application::InitBindGroups()
 	
 	bindings.emplace_back();
 	bindings[4].binding = 5;
-	bindings[4].buffer = w_buffer;
-	bindings[4].offset = 0;
-	bindings[4].size = TEXTURE_SIZE * sizeof(float);
+	bindings[4].textureView = butterflyTextureView;
 
 	bindings.emplace_back();
 	bindings[5].binding = 6;
@@ -996,6 +998,46 @@ void Application::InitTextures()
 	source.bytesPerRow = TEXTURE_SIZE * 4 * sizeof(float);
 	queue.writeTexture(destination, k_data.data(), k_data.size() * sizeof(float), source, textureDesc.size);
 
+	// Butterfly texture: (N/2) x log2(N), RGBA32Float
+	// Each texel (x, stage) = (tw.re, tw.im, a_idx, b_idx) for DIT FFT
+	textureDesc.size = { TEXTURE_SIZE / 2, TEXTURE_LOG, 1 };
+	textureDesc.format = TextureFormat::RGBA32Float;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	butterflyTexture = device.createTexture(textureDesc);
+	textureViewDesc.format = textureDesc.format;
+	butterflyTextureView = butterflyTexture.createView(textureViewDesc);
+
+	{
+		const float pi = static_cast<float>(std::numbers::pi);
+		std::vector<float> bfly(TEXTURE_SIZE / 2 * TEXTURE_LOG * 4);
+		for (int s = 0; s < TEXTURE_LOG; s++) {
+			int halfSpan = 1 << s;
+			int span     = 2 * halfSpan;
+			for (int x = 0; x < TEXTURE_SIZE / 2; x++) {
+				int local_j = x % halfSpan;
+				int group   = x / halfSpan;
+				int a_idx   = group * span + local_j;
+				int b_idx   = a_idx + halfSpan;
+				int k       = local_j * (TEXTURE_SIZE / span);
+				float angle = +2.0f * pi * k / TEXTURE_SIZE;
+				int i = (x + s * (TEXTURE_SIZE / 2)) * 4;
+				bfly[i+0] = std::cos(angle);
+				bfly[i+1] = std::sin(angle);
+				bfly[i+2] = static_cast<float>(a_idx);
+				bfly[i+3] = static_cast<float>(b_idx);
+			}
+		}
+		ImageCopyTexture bflyDest = {};
+		bflyDest.texture  = butterflyTexture;
+		bflyDest.mipLevel = 0;
+		bflyDest.origin   = { 0, 0, 0 };
+		bflyDest.aspect   = TextureAspect::All;
+		TextureDataLayout bflySrc = {};
+		bflySrc.offset       = 0;
+		bflySrc.bytesPerRow  = (TEXTURE_SIZE / 2) * 4 * sizeof(float);
+		bflySrc.rowsPerImage = TEXTURE_LOG;
+		queue.writeTexture(bflyDest, bfly.data(), bfly.size() * sizeof(float), bflySrc, textureDesc.size);
+	}
 
 	// Create a sampler
 	SamplerDescriptor samplerDesc;

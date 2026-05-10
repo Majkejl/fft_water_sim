@@ -21,7 +21,8 @@ struct MyUniforms {
 @group(0) @binding(1) var heightTexture: texture_2d<f32>;
 
 fn sampleHeight(uv: vec2f) -> f32 {
-	return textureLoad(heightTexture, vec2i(uv * 256), 0).r + textureLoad(heightTexture, vec2i(uv * 256), 0).g * 0.1;
+	let N = 256.0;
+	return textureLoad(heightTexture, vec2i(uv * N), 0).r / (N * N);
 }
 
 @vertex

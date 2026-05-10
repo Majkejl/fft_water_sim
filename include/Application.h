@@ -59,6 +59,7 @@ class Application
 	wgpu::RenderPipeline pipeline;
 	wgpu::ComputePipeline compPipeline; // TODO: remove when possible
 	wgpu::ComputePipeline precompute_pipe;
+	wgpu::ComputePipeline time_spectrum_pipe;
 	wgpu::ComputePipeline fft_horizontal_pipe;
 	wgpu::ComputePipeline fft_vertical_pipe;
 
@@ -77,11 +78,14 @@ class Application
 	wgpu::PipelineLayout layout;
 	wgpu::BindGroupLayout bindGroupLayout;
 	
-	wgpu::BindGroup c_bindGroup;
+	wgpu::BindGroup c_bindGroup1;
+	wgpu::BindGroup c_bindGroup2;
 	wgpu::PipelineLayout c_layout;
 	wgpu::BindGroupLayout c_bindGroupLayout;
 
 	// textures
+	wgpu::Texture kDataTexture;
+	wgpu::TextureView kDataTextureView;
 	wgpu::Texture heightTexture1;
 	wgpu::TextureView heightTextureView1;
 	wgpu::Texture heightTexture2;

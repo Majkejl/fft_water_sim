@@ -11,7 +11,8 @@
 using namespace wgpu;
 
 #define MESH_SIZE 150
-#define TEXTURE_SIZE 1024
+#define TEXTURE_SIZE 256
+#define TEXTURE_LOG 8
 #define PATCH_SIZE 150
 
 #ifdef __EMSCRIPTEN__
@@ -34,6 +35,9 @@ namespace {
 				pointData.push_back(static_cast<float>(j) / (size - 1)); // x
 				pointData.push_back(static_cast<float>(i) / (size - 1)); // y
 				pointData.push_back(0.f);		   				         // z
+
+				pointData.push_back(static_cast<float>(j) / (size - 1)); // u
+				pointData.push_back(static_cast<float>(i) / (size - 1)); // v
 
 				if (i < size - 1 && j < size - 1)
 				{
@@ -74,6 +78,7 @@ namespace {
 		using std::exp;
 
 		auto freq = std::sqrt(pos_x * pos_x + pos_y * pos_y);
+		if (freq < 0.001) return 0.;
 		auto wind = std::sqrt(wind_x * wind_x + wind_y * wind_y);
 
 		double g = 9.81;
@@ -84,36 +89,85 @@ namespace {
 
 		double density = alpha * ( pow(g, 2) / pow(freq, 5) ) * exp( -5 * pow(freq_p / freq, 4) / 4) * pow(enhancment, r);
 		
-
-		return density * ((pos_x / freq) * (wind_x / wind) + (pos_y / freq) * (wind_y / wind));
+		return density; //* std::pow(std::max((pos_x / freq) * (wind_x / wind) + (pos_y / freq) * (wind_y / wind), 0.), 2);
 	}
 
-	void CreateHeightMap(std::vector<float>& heightMap) // TODO add params
+	void fillTextures(std::vector<float>& spectrum, std::vector<float>& k_data) // TODO add params
 	{
-		heightMap.clear();
+		int N = TEXTURE_SIZE;
+		spectrum = std::vector<float>(N * N * 2);
+		k_data = std::vector<float>(N * N * 4);
 		std::random_device rd{};
 		std::mt19937 gen{rd()};
 		std::normal_distribution d{0., 1.};
 		auto rand_num = [&d, &gen]{ return d(gen); };
 
-		for (int i = 0; i < TEXTURE_SIZE; i++)
-		{
-			for (int j = 0; j < TEXTURE_SIZE; j++)
-			{
-				auto pos = [&](int x){ return 2 * static_cast<double>(std::numbers::pi) * (static_cast<double>(x) - TEXTURE_SIZE / 2) / PATCH_SIZE; };
-				auto bruh = jonswap(pos(j), pos(i), 50000., 40., 0.);
-				auto amp = (bruh < 0 ? -1 : 1) * std::sqrt(std::abs(bruh)) / std::sqrt(2);
-				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
-				heightMap.emplace_back(static_cast<float>(amp * rand_num()));
+		for (int ky = 0; ky < N; ky++) {
+			for (int kx = 0; kx < N; kx++) {
+				
+				int i = kx + ky * N;
+				
+				int sx = (N - kx) % N;
+				int sy = (N - ky) % N;
+				int j  = sx + sy * N;
+
+				int kx_m = (kx <= N/2) ? kx : kx - N;
+				int ky_m = (ky <= N/2) ? ky : ky - N;
+				
+				// physical wave vector
+				auto pos = [&](int x){ return 2 * static_cast<float>(x) * static_cast<float>(std::numbers::pi) / PATCH_SIZE; };
+				float kx_phys = pos(kx_m);
+				float ky_phys = pos(ky_m);
+
+				float k_len = std::sqrt(kx_phys * kx_phys + ky_phys * ky_phys);
+
+				float omega = std::sqrt(9.81f * k_len);
+
+				// store k data
+				k_data[4 * i + 0] = kx_phys;
+				k_data[4 * i + 1] = ky_phys;
+				k_data[4 * i + 2] = omega;
+				k_data[4 * i + 3] = 0.;
+
+				// mirrored pair gets mirrored k
+				k_data[4 * j + 0] = -kx_phys;
+				k_data[4 * j + 1] = -ky_phys;
+				k_data[4 * j + 2] = omega;
+				k_data[4 * j + 3] = 0.;
+
+				auto P = jonswap(kx_phys, ky_phys, 5000., 40., 0.);
+
+
+				auto gr = rand_num();
+				auto gi = rand_num();
+
+				auto scale = sqrt(P * 0.5f);
+
+				float re = static_cast<float>(gr * scale);
+				float im = static_cast<float>(gi * scale);
+
+
+				// Self-symmetric (Nyquist / DC cases)
+				if (i == j) {
+					spectrum[2*i] = re;
+					spectrum[2*i + 1] = 0.0f;
+				}
+				else {
+					spectrum[2*i]     = re;
+					spectrum[2*i + 1] = im;
+
+					spectrum[2*j]     = re;
+					spectrum[2*j + 1] = -im;
+				}
 			}
 		}
 	}
 
-	std::pair<float, float> w_k(int k)
-	{
-		return {static_cast<float>(std::cos(2 * std::numbers::pi / TEXTURE_SIZE * k)),
-					static_cast<float>(-std::sin(2 * std::numbers::pi / TEXTURE_SIZE * k))};
-	}
+	// std::pair<float, float> w_k(int k)
+	// {
+	// 	return {static_cast<float>(std::cos(2 * std::numbers::pi / TEXTURE_SIZE * k)),
+	// 				static_cast<float>(-std::sin(2 * std::numbers::pi / TEXTURE_SIZE * k))};
+	// }
 }
 
 Application::Application(int w, int h) : width(w), height(h) // TODO : add throws on errors
@@ -136,10 +190,17 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	
 	instance.release();
 	
+
 	std::cout << "Requesting device..." << std::endl;
 	DeviceDescriptor deviceDesc = {};
 	deviceDesc.label = "My Device";
-	deviceDesc.requiredFeatureCount = 0;
+
+	WGPUFeatureName features[] = {
+		WGPUFeatureName_Float32Filterable,
+	};
+
+	deviceDesc.requiredFeatureCount = 1;
+	deviceDesc.requiredFeatures = features;
 	deviceDesc.requiredLimits = nullptr;
 	deviceDesc.defaultQueue.nextInChain = nullptr;
 	deviceDesc.defaultQueue.label = "The default queue";
@@ -395,17 +456,21 @@ void Application::InitPipeline()
 	// We use one vertex buffer
 	VertexBufferLayout vertexBufferLayout;
 	// We now have 2 attributes
-	std::vector<VertexAttribute> vertexAttribs(1);
+	std::vector<VertexAttribute> vertexAttribs(2);
 	
 	// Describe the position attribute
 	vertexAttribs[0].shaderLocation = 0; // @location(0)
 	vertexAttribs[0].format = VertexFormat::Float32x2;
 	vertexAttribs[0].offset = 0;
+
+	vertexAttribs[1].shaderLocation = 1;
+	vertexAttribs[1].format = VertexFormat::Float32x2;
+	vertexAttribs[1].offset = 3 * sizeof(float);
 	
 	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
 	vertexBufferLayout.attributes = vertexAttribs.data();
 	
-	vertexBufferLayout.arrayStride = 3 * sizeof(float);
+	vertexBufferLayout.arrayStride = 5 * sizeof(float);
 
 	vertexBufferLayout.stepMode = VertexStepMode::Vertex;
 	
@@ -576,7 +641,7 @@ void Application::InitCompute()
 	textureOutBindingLayout.visibility = ShaderStage::Compute;
 	textureOutBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
 	textureOutBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
-	textureOutBindingLayout.storageTexture.format = TextureFormat::RGBA8Unorm;
+	textureOutBindingLayout.storageTexture.format = TextureFormat::RGBA32Float;
 
 	BindGroupLayoutEntry& textureInBindingLayout = bindingLayoutEntries[2];
 	textureInBindingLayout.binding = 3;
@@ -609,12 +674,25 @@ void Application::InitCompute()
 
 	// Create compute pipeline
 	ComputePipelineDescriptor computePipelineDesc;
-	computePipelineDesc.compute.constantCount = 0;
+	computePipelineDesc.compute.constantCount = 1;
 	computePipelineDesc.compute.constants = nullptr;
 	computePipelineDesc.compute.entryPoint = "cs_main";
 	computePipelineDesc.compute.module = computeShaderModule;
 	computePipelineDesc.layout = c_layout;
 	compPipeline = device.createComputePipeline(computePipelineDesc);
+	
+	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+	precompute_pipe = device.createComputePipeline(computePipelineDesc);
+
+	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+	time_spectrum_pipe = device.createComputePipeline(computePipelineDesc);
+	
+	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+	fft_horizontal_pipe = device.createComputePipeline(computePipelineDesc);
+	
+	computePipelineDesc.compute.entryPoint = "timeSpectrum";
+	fft_vertical_pipe = device.createComputePipeline(computePipelineDesc);
+
 }
 
 void Application::RunCompute() 
@@ -632,9 +710,8 @@ void Application::RunCompute()
 
 	// Use compute pass
 	computePass.setPipeline(compPipeline);
-	computePass.setBindGroup(0, c_bindGroup, 0, nullptr);
+	computePass.setBindGroup(0, c_bindGroup1, 0, nullptr);
 	computePass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
-
 
 	// Finalize compute pass
 	computePass.end();
@@ -666,10 +743,10 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	// Don't forget to = Default
 	RequiredLimits requiredLimits = Default;
 
-	requiredLimits.limits.maxVertexAttributes = 1;
+	requiredLimits.limits.maxVertexAttributes = 2;
 	requiredLimits.limits.maxVertexBuffers = 1;
-	requiredLimits.limits.maxBufferSize = MESH_SIZE * MESH_SIZE * 3 * sizeof(float);
-	requiredLimits.limits.maxVertexBufferArrayStride = 3 * sizeof(float);
+	requiredLimits.limits.maxBufferSize = MESH_SIZE * MESH_SIZE * 5 * sizeof(float);
+	requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
 	//requiredLimits.limits.maxInterStageShaderComponents = 6;
@@ -761,18 +838,27 @@ void Application::InitBuffers()
 	uniforms.projection = glm::mat4(1.f);
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
-	bufferDesc.size = TEXTURE_SIZE * 2 * sizeof(float);
+	int stages = (int)std::log2(TEXTURE_SIZE);
+	bufferDesc.size = TEXTURE_SIZE * stages * sizeof(float);
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Storage;
 	bufferDesc.mappedAtCreation = false;
 	w_buffer = device.createBuffer(bufferDesc);
 
-	// TODO write buffer
-	std::vector<float> w_n;
-	for (int i = 0; i < TEXTURE_SIZE; i++)
-	{
-		auto w_pair = w_k(i);
-		w_n.emplace_back(w_pair.first);
-		w_n.emplace_back(w_pair.second);
+	std::vector<float> w_n(TEXTURE_SIZE * stages);
+	for (int stage = 0; stage < stages; stage++) {
+
+		int span = 1 << (stage + 1);
+		int half = span >> 1;
+
+		for (int j = 0; j < TEXTURE_SIZE/2; j++) {
+
+			float angle = -2.0f * static_cast<float>(std::numbers::pi) * (j % half) / span;
+
+			int i = j + stage * (TEXTURE_SIZE/2);
+
+			w_n[2*i + 0] = cos(angle);
+			w_n[2*i + 1] = sin(angle);
+		}
 	}
 
 	queue.writeBuffer(w_buffer, 0, w_n.data(), bufferDesc.size);
@@ -825,24 +911,30 @@ void Application::InitBindGroups()
 	bindings[4].binding = 5;
 	bindings[4].buffer = w_buffer;
 	bindings[4].offset = 0;
-	bindings[4].size = TEXTURE_SIZE * 2 * sizeof(float);
+	bindings[4].size = TEXTURE_SIZE * (int)std::log2(TEXTURE_SIZE) * sizeof(float);
 	
 	BindGroupDescriptor c_bindGroupDesc;
 	c_bindGroupDesc.layout = c_bindGroupLayout;
 	c_bindGroupDesc.entryCount = (uint32_t)bindings.size();
 	c_bindGroupDesc.entries = bindings.data();
-	c_bindGroup = device.createBindGroup(c_bindGroupDesc);
+	c_bindGroup1 = device.createBindGroup(c_bindGroupDesc);
+
+	bindings[1].textureView = heightTextureView2;
+	bindings[2].textureView = heightTextureView1;
+	c_bindGroupDesc.entries = bindings.data();
+	c_bindGroup2 = device.createBindGroup(c_bindGroupDesc);
 
 }
 
 void Application::InitTextures() 
 {
+	// fft ping pongs
 	TextureDescriptor textureDesc;
 	textureDesc.dimension = TextureDimension::_2D;
 	textureDesc.size = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
 	textureDesc.mipLevelCount = 1;
 	textureDesc.sampleCount = 1;
-	textureDesc.format = TextureFormat::RGBA8Unorm;
+	textureDesc.format = TextureFormat::RGBA32Float;
 	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::StorageBinding;
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
@@ -862,7 +954,7 @@ void Application::InitTextures()
 	heightTextureView1 = heightTexture1.createView(textureViewDesc);
 	heightTextureView2 = heightTexture2.createView(textureViewDesc);
 	
-
+	// h0 spectrum
 	textureDesc.format = TextureFormat::RG32Float;
 	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
 	spectrumTexture = device.createTexture(textureDesc);
@@ -870,8 +962,15 @@ void Application::InitTextures()
 	textureViewDesc.format = textureDesc.format;
 	spectrumTextureView = spectrumTexture.createView(textureViewDesc);
 	
+	// k_data
+	textureDesc.format = TextureFormat::RGBA32Float;
+	kDataTexture = device.createTexture(textureDesc);
+	textureViewDesc.format = textureDesc.format;
+	kDataTextureView = kDataTexture.createView(textureViewDesc);
+	
 	std::vector<float> spectrum;
-	CreateHeightMap(spectrum);
+	std::vector<float> k_data;
+	fillTextures(spectrum, k_data);
 
 	ImageCopyTexture destination;
 	destination.texture = spectrumTexture;
@@ -885,6 +984,7 @@ void Application::InitTextures()
 	source.rowsPerImage = TEXTURE_SIZE;
 
 	queue.writeTexture(destination, spectrum.data(), spectrum.size() * sizeof(float), source, textureDesc.size);
+
 
 	// Create a sampler
 	SamplerDescriptor samplerDesc;

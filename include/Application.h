@@ -107,9 +107,23 @@ class Application
 
 	wgpu::Sampler sampler;
 
+	// Orbit camera (Z-up, always looking at origin)
+	float cam_theta  = 0.8f;   // azimuth angle (radians)
+	float cam_phi    = 0.4f;   // elevation angle (radians)
+	float cam_radius = 3.0f;   // distance from origin
+
+	// Mouse tracking
+	bool   mouse_dragging = false;
+	double last_mouse_x   = 0.0;
+	double last_mouse_y   = 0.0;
+
 private:
     wgpu::TextureView GetNextSurfaceTextureView();
     wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+
+	static void OnMouseButton(GLFWwindow* w, int button, int action, int mods);
+	static void OnCursorPos(GLFWwindow* w, double x, double y);
+	static void OnScroll(GLFWwindow* w, double dx, double dy);
 	void InitCompute();
     void InitPipeline();
     void InitBuffers();

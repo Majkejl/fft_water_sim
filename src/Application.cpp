@@ -180,7 +180,11 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	window = glfwCreateWindow(width, height, "Learn WebGPU", nullptr, nullptr);
-	
+	glfwSetWindowUserPointer(window, this);
+	glfwSetMouseButtonCallback(window, OnMouseButton);
+	glfwSetCursorPosCallback(window, OnCursorPos);
+	glfwSetScrollCallback(window, OnScroll);
+
 	Instance instance = wgpuCreateInstance(nullptr);
 	
 	// Get adapter
@@ -295,12 +299,16 @@ void Application::MainLoop()
 
 	RunCompute();
 
-	// Update uniform buffer
-	uniforms.eye_pos = glm::vec3(2.f);
+	// Orbit camera: eye position from spherical coordinates (Z-up)
+	glm::vec3 eye(
+		cam_radius * std::cos(cam_phi) * std::cos(cam_theta),
+		cam_radius * std::cos(cam_phi) * std::sin(cam_theta),
+		cam_radius * std::sin(cam_phi)
+	);
+	uniforms.eye_pos    = eye;
 	uniforms.projection = glm::perspective(glm::radians(45.0f), static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
-	uniforms.view = glm::lookAt(uniforms.eye_pos, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
-	uniforms.model = glm::scale(glm::translate(glm::mat4(1.f), glm::vec3(-1.f, -1.f, 0.f)),
-								glm::vec3(2.f, 2.f, 1.f));
+	uniforms.view       = glm::lookAt(eye, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
+	uniforms.model = glm::mat4(1.f);
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
 	// Get the next target texture view
@@ -406,9 +414,39 @@ void Application::MainLoop()
 #endif
 }
 
-bool Application::IsRunning() 
+bool Application::IsRunning()
 {
 	return !glfwWindowShouldClose(window);
+}
+
+void Application::OnMouseButton(GLFWwindow* w, int button, int action, int /*mods*/)
+{
+	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		app->mouse_dragging = (action == GLFW_PRESS);
+		if (app->mouse_dragging)
+			glfwGetCursorPos(w, &app->last_mouse_x, &app->last_mouse_y);
+	}
+}
+
+void Application::OnCursorPos(GLFWwindow* w, double x, double y)
+{
+	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+	if (!app->mouse_dragging) return;
+	double dx = x - app->last_mouse_x;
+	double dy = y - app->last_mouse_y;
+	app->last_mouse_x = x;
+	app->last_mouse_y = y;
+	app->cam_theta += static_cast<float>(dx) * 0.005f;
+	app->cam_phi   -= static_cast<float>(dy) * 0.005f;
+	app->cam_phi    = glm::clamp(app->cam_phi, glm::radians(-85.0f), glm::radians(85.0f));
+}
+
+void Application::OnScroll(GLFWwindow* w, double /*dx*/, double dy)
+{
+	auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+	app->cam_radius *= std::pow(0.9f, static_cast<float>(dy));
+	app->cam_radius  = glm::clamp(app->cam_radius, 0.5f, 50.0f);
 }
 
 TextureView Application::GetNextSurfaceTextureView() 

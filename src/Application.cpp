@@ -4,10 +4,12 @@
 #include "Application.h"
 #include "ResourceManager.h"
 // #include "PerlinNoise.hpp"
+#include <algorithm>
 #include <random>
 #include <cmath>
 #include <cstring>
 #include <numbers>
+#include <filesystem>
 
 using namespace wgpu;
 
@@ -251,6 +253,7 @@ Application::Application(int w, int h) : width(w), height(h) // TODO : add throw
 	InitBuffers();
 	InitTextures();
 	InitBindGroups();
+	InitCubemap();
 }
 
 Application::~Application() // TODO: tidy up
@@ -274,6 +277,7 @@ Application::~Application() // TODO: tidy up
 	depthTexture.destroy();
 	depthTexture.release();
 	pipeline.release();
+	skyboxPipeline.release();
 	compPipeline.release();
 	
 	// core elements
@@ -369,10 +373,12 @@ void Application::MainLoop()
 	// Set binding group here!
 	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
 
-	// Replace `draw()` with `drawIndexed()` and `vertexCount` with `indexCount`
-	// The extra argument is an offset within the index buffer.
 	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
-	//renderPass.draw(50, 1, 0, 0);
+
+	// Skybox drawn after water: only fills pixels where depth == 1.0 (no geometry)
+	renderPass.setPipeline(skyboxPipeline);
+	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
+	renderPass.draw(3, 1, 0, 0);
 
 	renderPass.end();
 	renderPass.release();
@@ -438,13 +444,11 @@ TextureView Application::GetNextSurfaceTextureView()
 
 void Application::InitPipeline() 
 {
-	std::cout << "Creating shader module..." << std::endl;
-	ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
-	std::cout << "Shader module: " << shaderModule << std::endl;
+	ShaderModule waterModule  = ResourceManager::loadShaderModule(RESOURCE_DIR "/water.wgsl",  device);
+	ShaderModule skyboxModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/skybox.wgsl", device);
 
-	// Check for errors
-	if (shaderModule == nullptr) {
-		std::cerr << "Could not load shader!" << std::endl;
+	if (waterModule == nullptr || skyboxModule == nullptr) {
+		std::cerr << "Could not load shaders!" << std::endl;
 		exit(1);
 	}
 
@@ -479,7 +483,7 @@ void Application::InitPipeline()
 	// NB: We define the 'shaderModule' in the second part of this chapter.
 	// Here we tell that the programmable vertex shader stage is described
 	// by the function called 'vs_main' in that module.
-	pipelineDesc.vertex.module = shaderModule;
+	pipelineDesc.vertex.module = waterModule;
 	pipelineDesc.vertex.entryPoint = "vs_main";
 	pipelineDesc.vertex.constantCount = 0;
 	pipelineDesc.vertex.constants = nullptr;
@@ -504,7 +508,7 @@ void Application::InitPipeline()
 	// We tell that the programmable fragment shader stage is described
 	// by the function called 'fs_main' in the shader module.
 	FragmentState fragmentState;
-	fragmentState.module = shaderModule;
+	fragmentState.module = waterModule;
 	fragmentState.entryPoint = "fs_main";
 	fragmentState.constantCount = 0;
 	fragmentState.constants = nullptr;
@@ -578,27 +582,30 @@ void Application::InitPipeline()
 	// Default value as well (irrelevant for count = 1 anyways)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
 
-	// The uniform buffer binding that we already had
 	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
 	bindingLayout.binding = 0;
 	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	bindingLayout.buffer.type = BufferBindingType::Uniform;
 	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
 
-	// The texture binding
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
 	textureBindingLayout.binding = 1;
 	textureBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
 	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
-	// The texture sampler binding
 	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
 	samplerBindingLayout.binding = 2;
-	samplerBindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	samplerBindingLayout.visibility = ShaderStage::Fragment;
 	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
+
+	BindGroupLayoutEntry& cubemapBindingLayout = bindingLayoutEntries[3];
+	cubemapBindingLayout.binding = 3;
+	cubemapBindingLayout.visibility = ShaderStage::Fragment;
+	cubemapBindingLayout.texture.sampleType = TextureSampleType::Float;
+	cubemapBindingLayout.texture.viewDimension = TextureViewDimension::Cube;
 
 	// Create a bind group layout
 	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -613,11 +620,48 @@ void Application::InitPipeline()
 	layout = device.createPipelineLayout(layoutDesc);
 
 	pipelineDesc.layout = layout;
-	
+
 	pipeline = device.createRenderPipeline(pipelineDesc);
 
-	// We no longer need to access the shader module
-	shaderModule.release();
+	// Skybox pipeline: fullscreen triangle, no vertex buffer, depth LessEqual + no write
+	RenderPipelineDescriptor skyboxDesc;
+	skyboxDesc.vertex.module       = skyboxModule;
+	skyboxDesc.vertex.entryPoint   = "vs_skybox";
+	skyboxDesc.vertex.bufferCount  = 0;
+	skyboxDesc.vertex.buffers      = nullptr;
+	skyboxDesc.vertex.constantCount = 0;
+	skyboxDesc.vertex.constants    = nullptr;
+	skyboxDesc.primitive.topology         = PrimitiveTopology::TriangleList;
+	skyboxDesc.primitive.stripIndexFormat = IndexFormat::Undefined;
+	skyboxDesc.primitive.frontFace        = FrontFace::CCW;
+	skyboxDesc.primitive.cullMode         = CullMode::None;
+
+	FragmentState skyboxFragment;
+	skyboxFragment.module        = skyboxModule;
+	skyboxFragment.entryPoint    = "fs_skybox";
+	skyboxFragment.constantCount = 0;
+	skyboxFragment.constants     = nullptr;
+	skyboxFragment.targetCount   = 1;
+	skyboxFragment.targets       = &colorTarget;
+	skyboxDesc.fragment = &skyboxFragment;
+
+	DepthStencilState skyboxDepth = Default;
+	skyboxDepth.format            = depthTextureFormat;
+	skyboxDepth.depthWriteEnabled = false;
+	skyboxDepth.depthCompare      = CompareFunction::LessEqual;
+	skyboxDepth.stencilReadMask   = 0;
+	skyboxDepth.stencilWriteMask  = 0;
+	skyboxDesc.depthStencil = &skyboxDepth;
+
+	skyboxDesc.multisample.count                  = 1;
+	skyboxDesc.multisample.mask                   = ~0u;
+	skyboxDesc.multisample.alphaToCoverageEnabled = false;
+	skyboxDesc.layout = layout;
+
+	skyboxPipeline = device.createRenderPipeline(skyboxDesc);
+
+	waterModule.release();
+	skyboxModule.release();
 }
 
 void Application::InitCompute()
@@ -630,39 +674,39 @@ void Application::InitCompute()
 	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(6, Default);
 
 	BindGroupLayoutEntry& uniformBindingLayout = bindingLayoutEntries[0];
-	uniformBindingLayout.binding = 0;
+	uniformBindingLayout.binding = 4;
 	uniformBindingLayout.visibility = ShaderStage::Compute;
 	uniformBindingLayout.buffer.type = BufferBindingType::Uniform;
 	uniformBindingLayout.buffer.hasDynamicOffset = true;
 	uniformBindingLayout.buffer.minBindingSize = sizeof(c_Uniforms);
 
 	BindGroupLayoutEntry& textureOutBindingLayout = bindingLayoutEntries[1];
-	textureOutBindingLayout.binding = 1;
+	textureOutBindingLayout.binding = 5;
 	textureOutBindingLayout.visibility = ShaderStage::Compute;
 	textureOutBindingLayout.storageTexture.access = StorageTextureAccess::WriteOnly;
 	textureOutBindingLayout.storageTexture.viewDimension = TextureViewDimension::_2D;
 	textureOutBindingLayout.storageTexture.format = TextureFormat::RGBA32Float;
 
 	BindGroupLayoutEntry& textureInBindingLayout = bindingLayoutEntries[2];
-	textureInBindingLayout.binding = 3;
+	textureInBindingLayout.binding = 6;
 	textureInBindingLayout.visibility = ShaderStage::Compute;
 	textureInBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	textureInBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	BindGroupLayoutEntry& spectrumBindingLayout = bindingLayoutEntries[3];
-	spectrumBindingLayout.binding = 4;
+	spectrumBindingLayout.binding = 7;
 	spectrumBindingLayout.visibility = ShaderStage::Compute;
 	spectrumBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	spectrumBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	BindGroupLayoutEntry& butterflyBindingLayout = bindingLayoutEntries[4];
-	butterflyBindingLayout.binding = 5;
+	butterflyBindingLayout.binding = 8;
 	butterflyBindingLayout.visibility = ShaderStage::Compute;
 	butterflyBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	butterflyBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
 	BindGroupLayoutEntry& kDataBindingLayout = bindingLayoutEntries[5];
-	kDataBindingLayout.binding = 6;
+	kDataBindingLayout.binding = 9;
 	kDataBindingLayout.visibility = ShaderStage::Compute;
 	kDataBindingLayout.texture.sampleType = TextureSampleType::UnfilterableFloat;
 	kDataBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
@@ -786,7 +830,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const
 	// For the depth buffer, we enable textures (up to the size of the window):
 	requiredLimits.limits.maxTextureDimension1D = height;
 	requiredLimits.limits.maxTextureDimension2D = width;
-	requiredLimits.limits.maxTextureArrayLayers = 1;
+	requiredLimits.limits.maxTextureArrayLayers = 6;
 
 	// Add the possibility to sample a texture in a shader
 	requiredLimits.limits.maxSampledTexturesPerShaderStage = 4;
@@ -871,55 +915,61 @@ void Application::InitBuffers()
 	c_uniformBuffer = device.createBuffer(bufferDesc);
 }
 
-void Application::InitBindGroups() 
+void Application::RebuildRenderBindGroup()
 {
-	std::vector<BindGroupEntry> bindings(3);
+	if (bindGroup) bindGroup.release();
 
+	std::vector<BindGroupEntry> bindings(4);
 	bindings[0].binding = 0;
-	bindings[0].buffer = uniformBuffer;
-	bindings[0].offset = 0;
-	bindings[0].size = sizeof(MyUniforms);
+	bindings[0].buffer  = uniformBuffer;
+	bindings[0].offset  = 0;
+	bindings[0].size    = sizeof(MyUniforms);
 
-	bindings[1].binding = 1;
+	bindings[1].binding     = 1;
 	bindings[1].textureView = heightTextureView1;
 
 	bindings[2].binding = 2;
 	bindings[2].sampler = sampler;
 
-	BindGroupDescriptor bindGroupDesc;
-	bindGroupDesc.layout = bindGroupLayout;
-	bindGroupDesc.entryCount = (uint32_t)bindings.size();
-	bindGroupDesc.entries = bindings.data();
-	bindGroup = device.createBindGroup(bindGroupDesc);
-	
-	// compute
-	
+	bindings[3].binding     = 3;
+	bindings[3].textureView = cubemapTextureView;
+
+	BindGroupDescriptor desc;
+	desc.layout     = bindGroupLayout;
+	desc.entryCount = static_cast<uint32_t>(bindings.size());
+	desc.entries    = bindings.data();
+	bindGroup = device.createBindGroup(desc);
+}
+
+void Application::InitBindGroups()
+{
+	// compute bind groups only — render bind group is built in RebuildRenderBindGroup()
+	std::vector<BindGroupEntry> bindings;
 	bindings.clear();
 	bindings.emplace_back();
-	bindings[0].binding = 0;
-	bindings[0].buffer = c_uniformBuffer;
-	bindings[0].offset = 0;
-	bindings[0].size = sizeof(c_Uniforms);
-	
-	
+	bindings[0].binding = 4;
+	bindings[0].buffer  = c_uniformBuffer;
+	bindings[0].offset  = 0;
+	bindings[0].size    = sizeof(c_Uniforms);
+
 	bindings.emplace_back();
-	bindings[1].binding = 1;
-	bindings[1].textureView = heightTextureView1;
-	
+	bindings[1].binding     = 5;
+	bindings[1].textureView = heightTextureView1;  // outTexture (ping)
+
 	bindings.emplace_back();
-	bindings[2].binding = 3;
-	bindings[2].textureView = heightTextureView2;
-	
+	bindings[2].binding     = 6;
+	bindings[2].textureView = heightTextureView2;  // inTexture  (ping)
+
 	bindings.emplace_back();
-	bindings[3].binding = 4;
+	bindings[3].binding     = 7;
 	bindings[3].textureView = spectrumTextureView;
-	
+
 	bindings.emplace_back();
-	bindings[4].binding = 5;
+	bindings[4].binding     = 8;
 	bindings[4].textureView = butterflyTextureView;
 
 	bindings.emplace_back();
-	bindings[5].binding = 6;
+	bindings[5].binding     = 9;
 	bindings[5].textureView = kDataTextureView;
 	
 	BindGroupDescriptor c_bindGroupDesc;
@@ -932,7 +982,76 @@ void Application::InitBindGroups()
 	bindings[2].textureView = heightTextureView1;
 	c_bindGroupDesc.entries = bindings.data();
 	c_bindGroup2 = device.createBindGroup(c_bindGroupDesc);
+}
 
+void Application::InitCubemap()
+{
+	namespace fs = std::filesystem;
+	for (auto const& entry : fs::directory_iterator(fs::path(RESOURCE_DIR "/Cubemap"))) {
+		if (entry.path().extension() == ".png")
+			cubemapPaths.push_back(entry.path().string());
+	}
+	std::sort(cubemapPaths.begin(), cubemapPaths.end());
+
+	if (!cubemapPaths.empty())
+		LoadCubemap(0);
+}
+
+void Application::LoadCubemap(int index)
+{
+	if (index < 0 || index >= static_cast<int>(cubemapPaths.size())) return;
+	currentCubemapIndex = index;
+
+	std::vector<uint8_t> facePixels;
+	int faceSize = 0;
+	if (!ResourceManager::loadCubemapCross(cubemapPaths[index], facePixels, faceSize)) {
+		std::cerr << "Failed to load cubemap: " << cubemapPaths[index] << std::endl;
+		return;
+	}
+
+	if (cubemapTextureView) cubemapTextureView.release();
+	if (cubemapTexture) { cubemapTexture.destroy(); cubemapTexture.release(); }
+
+	TextureDescriptor texDesc;
+	texDesc.dimension      = TextureDimension::_2D;
+	texDesc.size           = { static_cast<uint32_t>(faceSize), static_cast<uint32_t>(faceSize), 6 };
+	texDesc.mipLevelCount  = 1;
+	texDesc.sampleCount    = 1;
+	texDesc.format         = TextureFormat::RGBA8Unorm;
+	texDesc.usage          = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	texDesc.viewFormatCount = 0;
+	texDesc.viewFormats    = nullptr;
+	cubemapTexture = device.createTexture(texDesc);
+
+	TextureViewDescriptor viewDesc;
+	viewDesc.aspect          = TextureAspect::All;
+	viewDesc.baseArrayLayer  = 0;
+	viewDesc.arrayLayerCount = 6;
+	viewDesc.baseMipLevel    = 0;
+	viewDesc.mipLevelCount   = 1;
+	viewDesc.dimension       = TextureViewDimension::Cube;
+	viewDesc.format          = TextureFormat::RGBA8Unorm;
+	cubemapTextureView = cubemapTexture.createView(viewDesc);
+
+	const int bytesPerFace = faceSize * faceSize * 4;
+	for (int face = 0; face < 6; face++) {
+		ImageCopyTexture dst = {};
+		dst.texture  = cubemapTexture;
+		dst.mipLevel = 0;
+		dst.origin   = { 0, 0, static_cast<uint32_t>(face) };
+		dst.aspect   = TextureAspect::All;
+
+		TextureDataLayout textLayout = {};
+		textLayout.offset       = 0;
+		textLayout.bytesPerRow  = static_cast<uint32_t>(faceSize) * 4;
+		textLayout.rowsPerImage = static_cast<uint32_t>(faceSize);
+
+		Extent3D extent = { static_cast<uint32_t>(faceSize), static_cast<uint32_t>(faceSize), 1 };
+		queue.writeTexture(dst, facePixels.data() + face * bytesPerFace,
+		                   static_cast<size_t>(bytesPerFace), textLayout, extent);
+	}
+
+	RebuildRenderBindGroup();
 }
 
 void Application::InitTextures() 

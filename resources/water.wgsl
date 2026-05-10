@@ -81,40 +81,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let diffuse  = diff * water;
 	let specular = spec * vec3f(1.0, 0.98, 0.9);
 
-	// Schlick Fresnel for water (F0 ≈ 0.02)
 	let NdotV   = max(dot(N, V), 0.0);
 	let fresnel  = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
 
-	// Cubemap reflection
 	let R        = reflect(-V, N);
-	let envColor = textureSample(envMap, envSampler, R).rgb;
+	// Z-up world → Y-up cubemap: (x,y,z) → (x,z,-y)
+	let envColor = textureSample(envMap, envSampler, vec3f(R.x, R.z, -R.y)).rgb;
 
 	return vec4f(ambient + diffuse + specular + fresnel * envColor, 1.0);
-}
-
-struct SkyboxOutput {
-	@builtin(position) position: vec4f,
-	@location(0) direction: vec3f,
-}
-
-@vertex
-fn vs_skybox(@builtin(vertex_index) vid: u32) -> SkyboxOutput {
-	let corners = array<vec2f, 3>(
-		vec2f(-1.0, -1.0),
-		vec2f( 3.0, -1.0),
-		vec2f(-1.0,  3.0),
-	);
-	let ndc = corners[vid];
-	let view_dir = vec3f(ndc.x / u.proj[0][0], ndc.y / u.proj[1][1], -1.0);
-	let view3 = mat3x3f(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
-	let world_dir = view_dir * view3;
-	var out: SkyboxOutput;
-	out.position  = vec4f(ndc, 1.0, 1.0);
-	out.direction = world_dir;
-	return out;
-}
-
-@fragment
-fn fs_skybox(in: SkyboxOutput) -> @location(0) vec4f {
-	return textureSample(envMap, envSampler, normalize(in.direction));
 }

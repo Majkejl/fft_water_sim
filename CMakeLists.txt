@@ -1,9 +1,19 @@
 cmake_minimum_required(VERSION 3.0...3.25)
 project(
     fft_water_sim
-    VERSION 0.1.0 
+    VERSION 0.1.0
     LANGUAGES CXX C
 )
+
+include(FetchContent)
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+)
+FetchContent_GetProperties(stb)
+if(NOT stb_POPULATED)
+    FetchContent_Populate(stb)
+endif()
     
 if (NOT EMSCRIPTEN)
     add_subdirectory(glfw)
@@ -18,19 +28,22 @@ add_subdirectory(glm)
 
 
 add_executable(fft_water_sim
-    main.cpp 
+    main.cpp
     include/PerlinNoise.hpp
     include/Application.h
     include/webgpu-utils.h
     include/ResourceManager.h
     src/Application.cpp
-    src/webgpu-utils.cpp  
+    src/webgpu-utils.cpp
     src/ResourceManager.cpp
 )
 
 target_include_directories(fft_water_sim
-     PUBLIC include
+    PUBLIC include
+    PUBLIC ${stb_SOURCE_DIR}
 )
+
+
 
 target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu glm)
 

@@ -5,12 +5,12 @@ struct c_Uniforms
     N: u32,
 }
 
-@group(0) @binding(0) var<uniform> u: c_Uniforms;
-@group(0) @binding(1) var outTexture: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(3) var inTexture: texture_2d<f32>;
-@group(0) @binding(4) var spectrumTexture: texture_2d<f32>;
-@group(0) @binding(5) var butterflyTex: texture_2d<f32>;
-@group(0) @binding(6) var kDataTexture: texture_2d<f32>;
+@group(0) @binding(4) var<uniform> u: c_Uniforms;
+@group(0) @binding(5) var outTexture: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(6) var inTexture: texture_2d<f32>;
+@group(0) @binding(7) var spectrumTexture: texture_2d<f32>;
+@group(0) @binding(8) var butterflyTex: texture_2d<f32>;
+@group(0) @binding(9) var kDataTexture: texture_2d<f32>;
 
 
 // @compute @workgroup_size(32, 32, 1)

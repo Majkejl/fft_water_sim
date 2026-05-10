@@ -9,6 +9,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <cassert>
+#include <string>
 #include <vector>
 
 #ifdef __EMSCRIPTEN__
@@ -57,6 +58,7 @@ class Application
 
 	// pipelines
 	wgpu::RenderPipeline pipeline;
+	wgpu::RenderPipeline skyboxPipeline;
 	wgpu::ComputePipeline compPipeline; // TODO: remove when possible
 	wgpu::ComputePipeline precompute_pipe;
 	wgpu::ComputePipeline time_spectrum_pipe;
@@ -98,6 +100,11 @@ class Application
 	wgpu::Texture foamTexture;
 	wgpu::TextureView foamTextureView;
 
+	wgpu::Texture cubemapTexture;
+	wgpu::TextureView cubemapTextureView;
+	std::vector<std::string> cubemapPaths;
+	int currentCubemapIndex = 0;
+
 	wgpu::Sampler sampler;
 
 private:
@@ -108,12 +115,15 @@ private:
     void InitBuffers();
 	void InitBindGroups();
 	void InitTextures();
+	void InitCubemap();
+	void RebuildRenderBindGroup();
 public:
     Application(int width, int height);
     ~Application();
 
     void MainLoop();
 	void RunCompute();
+	void LoadCubemap(int index);
 
     bool IsRunning();
 

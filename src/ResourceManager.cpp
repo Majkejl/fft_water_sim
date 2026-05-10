@@ -4,6 +4,23 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <cstring>
+
+#ifdef _MSC_VER
+#  pragma warning(push, 0)
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wall"
+#  pragma GCC diagnostic ignored "-Wextra"
+#endif
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+#ifdef _MSC_VER
+#  pragma warning(pop)
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic pop
+#endif
 
 using namespace wgpu;
 
@@ -90,4 +107,40 @@ ShaderModule ResourceManager::loadShaderModule(const std::filesystem::path& path
 #endif
 	shaderDesc.nextInChain = &shaderCodeDesc.chain;
 	return device.createShaderModule(shaderDesc);
+}
+
+bool ResourceManager::loadCubemapCross(
+	const std::filesystem::path& path,
+	std::vector<uint8_t>& facePixels,
+	int& faceSize)
+{
+	int w, h, ch;
+	stbi_uc* img = stbi_load(path.string().c_str(), &w, &h, &ch, 4);
+	if (!img) return false;
+
+	// Horizontal cross layout: 4 columns × 3 rows, square image padded to w×w.
+	//        [ +Y ]
+	//  [-X] [+Z] [+X] [-Z]
+	//        [ -Y ]
+	faceSize = w / 4;
+	const int yPad = (h - 3 * faceSize) / 2;
+
+	// WebGPU cubemap layer order: +X(0), -X(1), +Y(2), -Y(3), +Z(4), -Z(5)
+	// Standard Y-up cross assignment; Z-up→Y-up remapping is done in the shaders.
+	const int faceX[6] = { 2*faceSize, 0,       faceSize,          faceSize,          faceSize,  3*faceSize };
+	const int faceY[6] = { yPad+faceSize, yPad+faceSize, yPad, yPad+2*faceSize, yPad+faceSize, yPad+faceSize };
+
+	const int bytesPerFace = faceSize * faceSize * 4;
+	facePixels.resize(6 * bytesPerFace);
+
+	for (int face = 0; face < 6; face++) {
+		uint8_t* dst = facePixels.data() + face * bytesPerFace;
+		for (int row = 0; row < faceSize; row++) {
+			const stbi_uc* src = img + ((faceY[face] + row) * w + faceX[face]) * 4;
+			std::memcpy(dst + row * faceSize * 4, src, static_cast<size_t>(faceSize) * 4);
+		}
+	}
+
+	stbi_image_free(img);
+	return true;
 }

@@ -8,7 +8,7 @@ project(
 include(FetchContent)
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG master
+    GIT_TAG master 
 )
 FetchContent_GetProperties(stb)
 if(NOT stb_POPULATED)
@@ -95,6 +95,7 @@ endif()
 if (EMSCRIPTEN)
 	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
     target_link_options(fft_water_sim PRIVATE 
+        -sALLOW_MEMORY_GROWTH
         -sASYNCIFY
         --preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
     )

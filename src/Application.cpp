@@ -19,7 +19,7 @@ using namespace texture_helpers;
 static constexpr uint32_t   MESH_SIZE    = 512;
 static constexpr uint32_t   TEXTURE_SIZE = 512;
 static constexpr uint32_t   TEXTURE_LOG  = 9;
-static constexpr float PATCH_SIZE   = 256.f;
+static constexpr float PATCH_SIZE   = 128.f;
 
 // ---------------------------------------------------------------------------
 // Internal helpers (ocean data generation)
@@ -79,7 +79,7 @@ double jonswap(double pos_x, double pos_y,
 void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
 {
     const int N = TEXTURE_SIZE;
-    spectrum.assign(N * N * 2, 0.f);
+    spectrum.assign(N * N * 4, 0.f);
     k_data.assign(N * N * 4, 0.f);
 
     std::mt19937 gen{ std::random_device{}() };
@@ -113,13 +113,13 @@ void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
             float  im    = static_cast<float>(dist(gen) * scale);
 
             if (i == j) {
-                spectrum[2 * i]     = re;
-                spectrum[2 * i + 1] = 0.f; // force real for DC/Nyquist
+                spectrum[4 * i]     = re;
+                spectrum[4 * i + 1] = 0.f; // force real for DC/Nyquist
             } else {
-                spectrum[2 * i]     = re;
-                spectrum[2 * i + 1] = im;
-                spectrum[2 * j]     = re;
-                spectrum[2 * j + 1] = -im; // Hermitian symmetry
+                spectrum[4 * i]     = re;
+                spectrum[4 * i + 1] = im;
+                spectrum[4 * j]     = re;
+                spectrum[4 * j + 1] = -im; // Hermitian symmetry
             }
         }
     }
@@ -143,8 +143,8 @@ Application::Application(int w, int h) : width(w), height(h)
     glfwSetScrollCallback(window, on_scroll);
 
     Instance instance = wgpuCreateInstance(nullptr);
-
-    surface = glfwGetWGPUSurface(instance, window);
+    
+	surface = glfwGetWGPUSurface(instance, window);
     RequestAdapterOptions adapter_opts = {};
     adapter_opts.compatibleSurface = surface;
     Adapter adapter = instance.requestAdapter(adapter_opts);
@@ -268,8 +268,12 @@ Application::~Application()
 void Application::main_loop()
 {
     glfwPollEvents();
+	std::cout << 1 << "\n";
 
     run_compute();
+
+	std::cout << 1 << "\n";
+
 
     uniforms.eye_pos    = camera.eye();
     uniforms.view       = camera.view();
@@ -281,9 +285,11 @@ void Application::main_loop()
     uniforms.N          = static_cast<float>(TEXTURE_SIZE);
     uniforms.patch_size = PATCH_SIZE;
     queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(MyUniforms));
+	std::cout << 1 << "\n";
 
-    TextureView target = get_next_surface_view();
+    TextureView target = get_next_surface_view(); /// ERROR HERE SOMEWHERE DEBUG LATER
     if (!target) return;
+	std::cout << 1 << "\n";
 
     CommandEncoderDescriptor enc_desc = {};
     enc_desc.label = "Frame encoder";
@@ -320,6 +326,7 @@ void Application::main_loop()
     pass_desc.depthStencilAttachment = &depth_att;
 
     RenderPassEncoder pass = encoder.beginRenderPass(pass_desc);
+	std::cout << 2 << "\n";
 
     // Water mesh
     pass.setPipeline(pipeline);
@@ -411,10 +418,12 @@ TextureView Application::get_next_surface_view()
     view_desc.arrayLayerCount = 1;
     view_desc.aspect          = TextureAspect::All;
 
+	auto ret = texture.createView(view_desc); 
+
 #ifndef WEBGPU_BACKEND_WGPU
     wgpuTextureRelease(surface_tex.texture);
 #endif
-    return texture.createView(view_desc);
+    return ret;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +670,7 @@ void Application::run_compute()
        dispatch can select its slot via a dynamic offset within a single pass. */
     const float t = static_cast<float>(glfwGetTime());
     std::vector<uint8_t> ubuf(compute_uniform_stride * TEXTURE_LOG, 0);
-    for (int s = 0; s < TEXTURE_LOG; s++) {
+    for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         ComputeUniforms cu{ t, static_cast<uint32_t>(s), TEXTURE_SIZE, TEXTURE_LOG };
         std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(ComputeUniforms));
     }
@@ -683,7 +692,7 @@ void Application::run_compute()
        Ping-pong index: stage s uses bind_groups[1 - s%2] so output lands in [0] after
        8 stages (last odd stage writes to [0]). Height and slope share the same pattern. */
     pass.setPipeline(fft_h_pipeline);
-    for (int s = 0; s < TEXTURE_LOG; s++) {
+    for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
@@ -697,7 +706,7 @@ void Application::run_compute()
        sits in tex[TEXTURE_LOG % 2], so the vertical pass must offset its ping-pong index
        by TEXTURE_LOG to start reading from the correct texture. */
     pass.setPipeline(fft_v_pipeline);
-    for (int s = 0; s < TEXTURE_LOG; s++) {
+    for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         int bg = (TEXTURE_LOG + s + 1) % 2;
         pass.setBindGroup(0, h_fft_bind_groups [bg], 1, &off);
@@ -906,8 +915,8 @@ void Application::init_textures()
 
     /* Initial h0(k) spectrum — generated once on the CPU, uploaded, then read-only. */
     spectrum_texture      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
-                                              TextureFormat::RG32Float, upload_usage);
-    spectrum_texture_view = create_view_2d(spectrum_texture, TextureFormat::RG32Float);
+                                              TextureFormat::RGBA32Float, upload_usage);
+    spectrum_texture_view = create_view_2d(spectrum_texture, TextureFormat::RGBA32Float);
 
     /* Wave-vector and dispersion data (kx, ky, omega, unused). */
     k_data_texture      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
@@ -933,7 +942,7 @@ void Application::init_textures()
     };
 
     upload(spectrum_texture, spectrum.data(), spectrum.size() * sizeof(float),
-           TEXTURE_SIZE * 2 * sizeof(float), TEXTURE_SIZE);
+           TEXTURE_SIZE * 4 * sizeof(float), TEXTURE_SIZE);
     upload(k_data_texture, k_data.data(), k_data.size() * sizeof(float),
            TEXTURE_SIZE * 4 * sizeof(float), TEXTURE_SIZE);
 
@@ -946,10 +955,10 @@ void Application::init_textures()
     {
         const float pi = static_cast<float>(std::numbers::pi);
         std::vector<float> bfly(TEXTURE_SIZE / 2 * TEXTURE_LOG * 4);
-        for (int s = 0; s < TEXTURE_LOG; s++) {
+        for (unsigned s = 0; s < TEXTURE_LOG; s++) {
             int half_span = 1 << s;
             int span      = 2 * half_span;
-            for (int x = 0; x < TEXTURE_SIZE / 2; x++) {
+            for (unsigned x = 0; x < TEXTURE_SIZE / 2; x++) {
                 int local_j = x % half_span;
                 int group   = x / half_span;
                 int a_idx   = group * span + local_j;

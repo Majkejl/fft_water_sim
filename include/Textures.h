@@ -37,6 +37,7 @@ inline wgpu::TextureView create_view_2d(wgpu::Texture texture, wgpu::TextureForm
     d.mipLevelCount   = 1;
     d.dimension       = wgpu::TextureViewDimension::_2D;
     d.format          = format;
+    std::cout << "creating view";
     return texture.createView(d);
 }
 

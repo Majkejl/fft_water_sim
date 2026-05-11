@@ -97,24 +97,24 @@ struct SkyboxOutput {
 	@location(0) direction: vec3f,
 }
 
-@vertex
-fn vs_skybox(@builtin(vertex_index) vid: u32) -> SkyboxOutput {
-	let corners = array<vec2f, 3>(
-		vec2f(-1.0, -1.0),
-		vec2f( 3.0, -1.0),
-		vec2f(-1.0,  3.0),
-	);
-	let ndc = corners[vid];
-	let view_dir = vec3f(ndc.x / u.proj[0][0], ndc.y / u.proj[1][1], -1.0);
-	let view3 = mat3x3f(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
-	let world_dir = view_dir * view3;
-	var out: SkyboxOutput;
-	out.position  = vec4f(ndc, 1.0, 1.0);
-	out.direction = world_dir;
-	return out;
-}
+// @vertex
+// fn vs_skybox(@builtin(vertex_index) vid: u32) -> SkyboxOutput {
+// 	let corners = array<vec2f, 3>(
+// 		vec2f(-1.0, -1.0),
+// 		vec2f( 3.0, -1.0),
+// 		vec2f(-1.0,  3.0),
+// 	);
+// 	let ndc = corners[vid];
+// 	let view_dir = vec3f(ndc.x / u.proj[0][0], ndc.y / u.proj[1][1], -1.0);
+// 	let view3 = mat3x3f(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+// 	let world_dir = view_dir * view3;
+// 	var out: SkyboxOutput;
+// 	out.position  = vec4f(ndc, 1.0, 1.0);
+// 	out.direction = world_dir;
+// 	return out;
+// }
 
-@fragment
-fn fs_skybox(in: SkyboxOutput) -> @location(0) vec4f {
-	return textureSample(envMap, envSampler, normalize(in.direction));
-}
+// @fragment
+// fn fs_skybox(in: SkyboxOutput) -> @location(0) vec4f {
+// 	return textureSample(envMap, envSampler, normalize(in.direction));
+// }

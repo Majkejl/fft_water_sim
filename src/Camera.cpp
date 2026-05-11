@@ -22,5 +22,5 @@ void Camera::orbit(float dtheta, float dphi)
 
 void Camera::zoom(float delta)
 {
-    radius = glm::clamp(radius * std::pow(0.9f, delta), 0.5f, 50.f);
+    radius = glm::clamp(radius * std::pow(0.9f, delta), 0.5f, 300.f);
 }

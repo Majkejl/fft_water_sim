@@ -26,7 +26,12 @@ struct MyUniforms {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 projection;
-    glm::vec3 eye_pos; float _pad1;
+    glm::vec3 eye_pos;
+    float     N;           /* texture resolution (TEXTURE_SIZE) as float */
+    float     patch_size;  /* physical ocean patch width in metres */
+    float     _pad2;
+    float     _pad3;
+    float     _pad4;
 };
 
 /* Per-dispatch compute uniforms written into the dynamic-offset uniform buffer.
@@ -35,7 +40,7 @@ struct ComputeUniforms {
     float    time;
     uint32_t stage;
     uint32_t N;
-    float    _pad;
+    uint32_t log2n;
 };
 
 

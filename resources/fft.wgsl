@@ -2,6 +2,7 @@ struct c_Uniforms {
     time:  f32,
     stage: u32,
     N:     u32,
+    log2n: u32,
 }
 
 @group(0) @binding(0) var<uniform> u:            c_Uniforms;
@@ -26,7 +27,7 @@ fn fft_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
     let writ_a = i32(data.b + 0.5);
     let writ_b = i32(data.a + 0.5);
 
-    let log2n  = 8u;
+    let log2n  = u.log2n;
     let read_a = select(writ_a, i32(reverse(u32(writ_a), log2n)), stage == 0u);
     let read_b = select(writ_b, i32(reverse(u32(writ_b), log2n)), stage == 0u);
 
@@ -49,7 +50,7 @@ fn fft_vertical(@builtin(global_invocation_id) id: vec3<u32>) {
     let writ_a = i32(data.b + 0.5);
     let writ_b = i32(data.a + 0.5);
 
-    let log2n  = 8u;
+    let log2n  = u.log2n;
     let read_a = select(writ_a, i32(reverse(u32(writ_a), log2n)), stage == 0u);
     let read_b = select(writ_b, i32(reverse(u32(writ_b), log2n)), stage == 0u);
 

@@ -2,6 +2,7 @@ struct c_Uniforms {
     time:  f32,
     stage: u32,
     N:     u32,
+    log2n: u32,
 }
 
 @group(0) @binding(0) var<uniform> u:           c_Uniforms;
@@ -32,7 +33,8 @@ fn timeSpectrum(@builtin(global_invocation_id) id: vec3<u32>) {
     let exp_pos = vec2f(c,  s);
     let exp_neg = vec2f(c, -s);
 
-    let mirrored = (vec2i(N) - coord) % vec2i(N);
+    let Ni       = i32(N);
+    let mirrored = vec2i((Ni - coord.x) % Ni, (Ni - coord.y) % Ni);
     let h0_conj  = textureLoad(spectrum_tex, mirrored, 0).rg;
     let h0_neg   = vec2f(h0_conj.x, -h0_conj.y);
 

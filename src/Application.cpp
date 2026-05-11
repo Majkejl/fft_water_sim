@@ -16,17 +16,17 @@ using namespace wgpu;
 using namespace pipeline_helpers;
 using namespace texture_helpers;
 
-static constexpr uint32_t   MESH_SIZE    = 150;
-static constexpr uint32_t   TEXTURE_SIZE = 256;
-static constexpr uint32_t   TEXTURE_LOG  = 8;
-static constexpr float PATCH_SIZE   = 150.f;
+static constexpr uint32_t   MESH_SIZE    = 512;
+static constexpr uint32_t   TEXTURE_SIZE = 512;
+static constexpr uint32_t   TEXTURE_LOG  = 9;
+static constexpr float PATCH_SIZE   = 256.f;
 
 // ---------------------------------------------------------------------------
 // Internal helpers (ocean data generation)
 // ---------------------------------------------------------------------------
 namespace {
 
-void create_geometry(int size, std::vector<float>& vertices, std::vector<uint16_t>& indices)
+void create_geometry(int size, std::vector<float>& vertices, std::vector<uint32_t>& indices)
 {
     vertices.clear();
     indices.clear();
@@ -41,12 +41,12 @@ void create_geometry(int size, std::vector<float>& vertices, std::vector<uint16_
             vertices.push_back(static_cast<float>(i) / (size - 1)); // v
 
             if (i < size - 1 && j < size - 1) {
-                indices.push_back(static_cast<uint16_t>(j + i * size));
-                indices.push_back(static_cast<uint16_t>(j + i * size + size));
-                indices.push_back(static_cast<uint16_t>(j + i * size + 1));
-                indices.push_back(static_cast<uint16_t>(j + i * size + 1));
-                indices.push_back(static_cast<uint16_t>(j + i * size + size));
-                indices.push_back(static_cast<uint16_t>(j + i * size + size + 1));
+                indices.push_back(static_cast<uint32_t>(j + i * size));
+                indices.push_back(static_cast<uint32_t>(j + i * size + size));
+                indices.push_back(static_cast<uint32_t>(j + i * size + 1));
+                indices.push_back(static_cast<uint32_t>(j + i * size + 1));
+                indices.push_back(static_cast<uint32_t>(j + i * size + size));
+                indices.push_back(static_cast<uint32_t>(j + i * size + size + 1));
             }
         }
     }
@@ -108,7 +108,7 @@ void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
             k_data[4 * j + 1] = -ky_phys;
             k_data[4 * j + 2] = omega;
 
-            double scale = std::sqrt(jonswap(kx_phys, ky_phys, 5000.0, 40.0, 0.0) * 0.5);
+            double scale = std::sqrt(jonswap(kx_phys, ky_phys, 50000.0, 40.0, 0.0) * 0.5);
             float  re    = static_cast<float>(dist(gen) * scale);
             float  im    = static_cast<float>(dist(gen) * scale);
 
@@ -276,8 +276,10 @@ void Application::main_loop()
     uniforms.projection = glm::perspective(
         glm::radians(45.f),
         static_cast<float>(width) / static_cast<float>(height),
-        0.1f, 100.f);
-    uniforms.model = glm::mat4(1.f);
+        0.1f, PATCH_SIZE * 2.0f);
+    uniforms.model      = glm::scale(glm::mat4(1.f), glm::vec3(PATCH_SIZE));
+    uniforms.N          = static_cast<float>(TEXTURE_SIZE);
+    uniforms.patch_size = PATCH_SIZE;
     queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(MyUniforms));
 
     TextureView target = get_next_surface_view();
@@ -322,7 +324,7 @@ void Application::main_loop()
     // Water mesh
     pass.setPipeline(pipeline);
     pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer.getSize());
-    pass.setIndexBuffer(index_buffer, IndexFormat::Uint16, 0, index_buffer.getSize());
+    pass.setIndexBuffer(index_buffer, IndexFormat::Uint32, 0, index_buffer.getSize());
     pass.setBindGroup(0, bind_group, 0, nullptr);
     pass.drawIndexed(index_count, 1, 0, 0, 0);
 
@@ -434,8 +436,8 @@ void Application::init_pipeline()
         texture_layout (1, ShaderStage::Vertex | ShaderStage::Fragment),
         sampler_layout (2, ShaderStage::Fragment),
         texture_layout (3, ShaderStage::Fragment, TextureSampleType::Float, TextureViewDimension::Cube),
-        texture_layout (4, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
-        texture_layout (5, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+        texture_layout (4, ShaderStage::Fragment, TextureSampleType::Float),
+        texture_layout (5, ShaderStage::Fragment, TextureSampleType::Float),
     };
 
     BindGroupLayoutDescriptor bgl_desc = {};
@@ -660,7 +662,7 @@ void Application::run_compute()
     const float t = static_cast<float>(glfwGetTime());
     std::vector<uint8_t> ubuf(compute_uniform_stride * TEXTURE_LOG, 0);
     for (int s = 0; s < TEXTURE_LOG; s++) {
-        ComputeUniforms cu{ t, static_cast<uint32_t>(s), TEXTURE_SIZE, 0.f };
+        ComputeUniforms cu{ t, static_cast<uint32_t>(s), TEXTURE_SIZE, TEXTURE_LOG };
         std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(ComputeUniforms));
     }
     queue.writeBuffer(compute_uniform_buffer, 0, ubuf.data(), ubuf.size());
@@ -691,15 +693,18 @@ void Application::run_compute()
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
     }
 
-    /* Vertical IFFT — same ping-pong pattern, transposed dispatch dimensions. */
+    /* Vertical IFFT — transposed dispatch. After TEXTURE_LOG horizontal stages, the result
+       sits in tex[TEXTURE_LOG % 2], so the vertical pass must offset its ping-pong index
+       by TEXTURE_LOG to start reading from the correct texture. */
     pass.setPipeline(fft_v_pipeline);
     for (int s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
-        pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
+        int bg = (TEXTURE_LOG + s + 1) % 2;
+        pass.setBindGroup(0, h_fft_bind_groups [bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-        pass.setBindGroup(0, sx_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.setBindGroup(0, sx_fft_bind_groups[bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-        pass.setBindGroup(0, sy_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.setBindGroup(0, sy_fft_bind_groups[bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
     }
 
@@ -728,7 +733,7 @@ RequiredLimits Application::get_required_limits(Adapter adapter) const
     RequiredLimits limits = Default;
     limits.limits.maxVertexAttributes       = 2;
     limits.limits.maxVertexBuffers          = 1;
-    limits.limits.maxBufferSize             = static_cast<uint64_t>(MESH_SIZE) * MESH_SIZE * 5 * sizeof(float);
+    limits.limits.maxBufferSize             = static_cast<uint64_t>(MESH_SIZE) * MESH_SIZE * 6 * sizeof(uint32_t);
     limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
     limits.limits.maxBindGroups             = 1;
     limits.limits.maxUniformBuffersPerShaderStage = 1;
@@ -755,7 +760,7 @@ RequiredLimits Application::get_required_limits(Adapter adapter) const
 void Application::init_buffers()
 {
     std::vector<float>    vertices;
-    std::vector<uint16_t> indices;
+    std::vector<uint32_t> indices;
     create_geometry(MESH_SIZE, vertices, indices);
 
     index_count = static_cast<uint32_t>(indices.size());
@@ -768,7 +773,7 @@ void Application::init_buffers()
     vertex_buffer  = device.createBuffer(buf_desc);
     queue.writeBuffer(vertex_buffer, 0, vertices.data(), buf_desc.size);
 
-    buf_desc.size  = (indices.size() * sizeof(uint16_t) + 3) & ~3u; // align to 4
+    buf_desc.size  = indices.size() * sizeof(uint32_t);
     buf_desc.usage = BufferUsage::CopyDst | BufferUsage::Index;
     index_buffer   = device.createBuffer(buf_desc);
     queue.writeBuffer(index_buffer, 0, indices.data(), buf_desc.size);

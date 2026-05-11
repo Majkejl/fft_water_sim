@@ -29,7 +29,7 @@ struct MyUniforms {
     glm::vec3 eye_pos;
     float     N;           /* texture resolution (TEXTURE_SIZE) as float */
     float     patch_size;  /* physical ocean patch width in metres */
-    float     _pad2;
+    float     lambda;      /* choppiness / Jacobian scale */
     float     _pad3;
     float     _pad4;
 };
@@ -41,6 +41,16 @@ struct ComputeUniforms {
     uint32_t stage;
     uint32_t N;
     uint32_t log2n;
+};
+
+/* Per-frame uniforms for the foam compute shader. */
+struct FoamUniforms {
+    float lambda;
+    float threshold;
+    float erosion;
+    float fft_n;   /* TEXTURE_SIZE — normalisation divisor (N²) */
+    float foam_n;  /* FOAM_SIZE   — maps foam pixels to fold UV */
+    float _pad0, _pad1, _pad2;
 };
 
 
@@ -69,9 +79,10 @@ class Application
     wgpu::RenderPipeline skybox_pipeline;  /* fullscreen skybox */
 
     // --- compute pipelines ---
-    wgpu::ComputePipeline time_spectrum_pipeline; /* h0(k) → h(k,t) + slope spectra */
+    wgpu::ComputePipeline time_spectrum_pipeline; /* h0(k) → h(k,t) + displacement spectra */
     wgpu::ComputePipeline fft_h_pipeline;         /* row-wise IFFT stage */
     wgpu::ComputePipeline fft_v_pipeline;         /* column-wise IFFT stage */
+    wgpu::ComputePipeline foam_pipeline;          /* Jacobian-based foam accumulation */
 
     // --- geometry buffers ---
     wgpu::Buffer vertex_buffer;
@@ -82,6 +93,7 @@ class Application
     wgpu::Buffer uniform_buffer;          /* render-side MyUniforms */
     wgpu::Buffer compute_uniform_buffer;  /* ComputeUniforms × TEXTURE_LOG slots */
     uint32_t     compute_uniform_stride;  /* 256-byte aligned stride for dynamic offsets */
+    wgpu::Buffer foam_uniform_buffer;     /* FoamUniforms (16 bytes, written each frame) */
 
     // --- render-side bind group ---
     wgpu::BindGroup       bind_group;
@@ -93,26 +105,44 @@ class Application
     wgpu::BindGroupLayout  time_spectrum_bgl;
     wgpu::PipelineLayout   time_spectrum_layout;
 
-    // --- FFT compute bind groups (ping-pong pairs for height, slope_x, slope_y) ---
+    // --- FFT compute bind groups (ping-pong pairs for all 6 IFFT channels) ---
     /* [0]: out=tex[0], in=tex[1]   [1]: out=tex[1], in=tex[0] */
     wgpu::BindGroup       h_fft_bind_groups[2];
     wgpu::BindGroup       sx_fft_bind_groups[2];
     wgpu::BindGroup       sy_fft_bind_groups[2];
+    wgpu::BindGroup       dx_fft_bind_groups[2];
+    wgpu::BindGroup       dy_fft_bind_groups[2];
+    wgpu::BindGroup       fold_fft_bind_groups[2];
     wgpu::BindGroupLayout fft_bgl;
     wgpu::PipelineLayout  fft_layout;
+
+    // --- foam bind groups (ping-pong per frame) ---
+    /* [i]: reads foam_textures[i], writes foam_textures[1-i] */
+    wgpu::BindGroup       foam_bind_groups[2];
+    wgpu::BindGroupLayout foam_bgl;
+    wgpu::PipelineLayout  foam_layout;
+    uint32_t              foam_frame = 0;
 
     // --- ocean simulation textures ---
     wgpu::Texture     height_textures[2];      /* ping-pong IFFT targets (RGBA32Float) */
     wgpu::TextureView height_texture_views[2];
-    wgpu::Texture     slope_x_textures[2];     /* ping-pong for ∂h/∂x IFFT (RGBA32Float) */
+    wgpu::Texture     slope_x_textures[2];     /* ping-pong for ∂h/∂x (RGBA32Float) */
     wgpu::TextureView slope_x_texture_views[2];
-    wgpu::Texture     slope_y_textures[2];     /* ping-pong for ∂h/∂y IFFT (RGBA32Float) */
+    wgpu::Texture     slope_y_textures[2];     /* ping-pong for ∂h/∂y (RGBA32Float) */
     wgpu::TextureView slope_y_texture_views[2];
-    wgpu::Texture     spectrum_texture;         /* initial h0(k) spectrum (RG32Float) */
+    wgpu::Texture     disp_x_textures[2];      /* ping-pong for Dx choppy displacement */
+    wgpu::TextureView disp_x_texture_views[2];
+    wgpu::Texture     disp_y_textures[2];      /* ping-pong for Dy choppy displacement */
+    wgpu::TextureView disp_y_texture_views[2];
+    wgpu::Texture     fold_textures[2];        /* ping-pong for Jacobian fold field */
+    wgpu::TextureView fold_texture_views[2];
+    wgpu::Texture     foam_textures[2];        /* foam accumulation ping-pong (R32Float) */
+    wgpu::TextureView foam_texture_views[2];
+    wgpu::Texture     spectrum_texture;        /* initial h0(k) spectrum (RGBA32Float) */
     wgpu::TextureView spectrum_texture_view;
-    wgpu::Texture     butterfly_texture;        /* precomputed DIT butterfly table */
+    wgpu::Texture     butterfly_texture;       /* precomputed DIT butterfly table */
     wgpu::TextureView butterfly_texture_view;
-    wgpu::Texture     k_data_texture;           /* wave-vector kx/ky and dispersion omega */
+    wgpu::Texture     k_data_texture;          /* wave-vector kx/ky and dispersion omega */
     wgpu::TextureView k_data_texture_view;
 
     // --- environment / skybox ---
@@ -140,7 +170,7 @@ private:
     void init_bind_groups();
     void init_textures();
     void init_cubemap();
-    void rebuild_render_bind_group();
+    void rebuild_render_bind_group(int foam_idx = 0);
     void run_compute();
 
     /* GLFW input callbacks — registered in the constructor via glfwSetWindowUserPointer. */

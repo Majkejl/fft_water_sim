@@ -16,10 +16,12 @@ using namespace wgpu;
 using namespace pipeline_helpers;
 using namespace texture_helpers;
 
-static constexpr uint32_t   MESH_SIZE    = 512;
-static constexpr uint32_t   TEXTURE_SIZE = 512;
-static constexpr uint32_t   TEXTURE_LOG  = 9;
-static constexpr float PATCH_SIZE   = 128.f;
+static constexpr uint32_t   MESH_SIZE      = 256;
+static constexpr uint32_t   TEXTURE_SIZE   = 256;
+static constexpr uint32_t   FOAM_SIZE      = 1024;
+static constexpr uint32_t   TEXTURE_LOG    = 8;
+static constexpr float      PATCH_SIZE     = 64.f;
+static constexpr double     WAVE_AMPLITUDE = 10.;
 
 // ---------------------------------------------------------------------------
 // Internal helpers (ocean data generation)
@@ -35,7 +37,7 @@ void create_geometry(int size, std::vector<float>& vertices, std::vector<uint32_
         for (int j = 0; j < size; j++) {
             vertices.push_back(static_cast<float>(j) / (size - 1)); // x
             vertices.push_back(static_cast<float>(i) / (size - 1)); // y
-            vertices.push_back(0.f);                                  // z
+            vertices.push_back(0.f);                                // z
 
             vertices.push_back(static_cast<float>(j) / (size - 1)); // u
             vertices.push_back(static_cast<float>(i) / (size - 1)); // v
@@ -70,9 +72,13 @@ double jonswap(double pos_x, double pos_y,
     double sigma  = (freq <= freq_p) ? 0.07 : 0.09;
     double r      = exp(-pow(freq - freq_p, 2.0) / (2.0 * pow(sigma * freq_p, 2.0)));
 
+    double cos_theta = (pos_x * wind_x + pos_y * wind_y) / (freq * wind);
+    double dir = std::max(0.0, cos_theta);
+
     return alpha * (pow(g, 2.0) / pow(freq, 5.0))
          * exp(-5.0 * pow(freq_p / freq, 4.0) / 4.0)
-         * pow(enhancement, r);
+         * pow(enhancement, r)
+         * dir * dir;
 }
 
 /* Generates the h0(k) initial spectrum and the k-data (wave-vector + dispersion) textures. */
@@ -103,12 +109,15 @@ void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
             k_data[4 * i + 0] = kx_phys;
             k_data[4 * i + 1] = ky_phys;
             k_data[4 * i + 2] = omega;
-
+            k_data[4 * i + 3] = (k_len > 0.001) ? 1 / k_len : 0;
+            
             k_data[4 * j + 0] = -kx_phys;
             k_data[4 * j + 1] = -ky_phys;
             k_data[4 * j + 2] = omega;
+            k_data[4 * j + 3] = (k_len > 0.001) ? 1 / k_len : 0;
 
-            double scale = std::sqrt(jonswap(kx_phys, ky_phys, 50000.0, 40.0, 0.0) * 0.5);
+            double scale = std::sqrt(jonswap(kx_phys, ky_phys, 250000.0, 40.0, 0.0) * 0.5)
+                         * WAVE_AMPLITUDE;
             float  re    = static_cast<float>(dist(gen) * scale);
             float  im    = static_cast<float>(dist(gen) * scale);
 
@@ -206,9 +215,25 @@ Application::~Application()
         slope_y_texture_views[i].release();
         slope_y_textures[i].destroy();
         slope_y_textures[i].release();
+        disp_x_texture_views[i].release();
+        disp_x_textures[i].destroy();
+        disp_x_textures[i].release();
+        disp_y_texture_views[i].release();
+        disp_y_textures[i].destroy();
+        disp_y_textures[i].release();
+        fold_texture_views[i].release();
+        fold_textures[i].destroy();
+        fold_textures[i].release();
+        foam_texture_views[i].release();
+        foam_textures[i].destroy();
+        foam_textures[i].release();
         h_fft_bind_groups[i].release();
         sx_fft_bind_groups[i].release();
         sy_fft_bind_groups[i].release();
+        dx_fft_bind_groups[i].release();
+        dy_fft_bind_groups[i].release();
+        fold_fft_bind_groups[i].release();
+        foam_bind_groups[i].release();
     }
 
     time_spectrum_bind_group.release();
@@ -235,9 +260,12 @@ Application::~Application()
     time_spectrum_layout.release();
     fft_bgl.release();
     fft_layout.release();
+    foam_bgl.release();
+    foam_layout.release();
 
     uniform_buffer.release();
     compute_uniform_buffer.release();
+    foam_uniform_buffer.release();
     vertex_buffer.release();
     index_buffer.release();
 
@@ -250,6 +278,7 @@ Application::~Application()
     time_spectrum_pipeline.release();
     fft_h_pipeline.release();
     fft_v_pipeline.release();
+    foam_pipeline.release();
 
     sampler.release();
 
@@ -268,28 +297,23 @@ Application::~Application()
 void Application::main_loop()
 {
     glfwPollEvents();
-	std::cout << 1 << "\n";
 
     run_compute();
-
-	std::cout << 1 << "\n";
-
 
     uniforms.eye_pos    = camera.eye();
     uniforms.view       = camera.view();
     uniforms.projection = glm::perspective(
         glm::radians(45.f),
         static_cast<float>(width) / static_cast<float>(height),
-        0.1f, PATCH_SIZE * 2.0f);
+        0.1f, PATCH_SIZE * 10.0f);
     uniforms.model      = glm::scale(glm::mat4(1.f), glm::vec3(PATCH_SIZE));
     uniforms.N          = static_cast<float>(TEXTURE_SIZE);
     uniforms.patch_size = PATCH_SIZE;
+    uniforms.lambda     = 20.f;//1.2f;
     queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(MyUniforms));
-	std::cout << 1 << "\n";
 
     TextureView target = get_next_surface_view(); /// ERROR HERE SOMEWHERE DEBUG LATER
     if (!target) return;
-	std::cout << 1 << "\n";
 
     CommandEncoderDescriptor enc_desc = {};
     enc_desc.label = "Frame encoder";
@@ -326,7 +350,6 @@ void Application::main_loop()
     pass_desc.depthStencilAttachment = &depth_att;
 
     RenderPassEncoder pass = encoder.beginRenderPass(pass_desc);
-	std::cout << 2 << "\n";
 
     // Water mesh
     pass.setPipeline(pipeline);
@@ -447,6 +470,9 @@ void Application::init_pipeline()
         texture_layout (3, ShaderStage::Fragment, TextureSampleType::Float, TextureViewDimension::Cube),
         texture_layout (4, ShaderStage::Fragment, TextureSampleType::Float),
         texture_layout (5, ShaderStage::Fragment, TextureSampleType::Float),
+        texture_layout (6, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+        texture_layout (7, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+        texture_layout (8, ShaderStage::Fragment, TextureSampleType::Float),
     };
 
     BindGroupLayoutDescriptor bgl_desc = {};
@@ -599,6 +625,9 @@ void Application::init_compute()
             texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
             storage_texture_layout(4, ShaderStage::Compute),
             storage_texture_layout(5, ShaderStage::Compute),
+            storage_texture_layout(6, ShaderStage::Compute),
+            storage_texture_layout(7, ShaderStage::Compute),
+            storage_texture_layout(8, ShaderStage::Compute),
         };
 
         BindGroupLayoutDescriptor bgl_desc = {};
@@ -658,6 +687,40 @@ void Application::init_compute()
 
         fft_module.release();
     }
+
+    // --- foam pipeline (foam.wgsl) ---
+    {
+        ShaderModule foam_module = ResourceManager::load_shader_module(
+            RESOURCE_DIR "/foam.wgsl", device);
+
+        std::vector<BindGroupLayoutEntry> foam_entries = {
+            uniform_layout        (0, ShaderStage::Compute, false, sizeof(FoamUniforms)),
+            texture_layout        (1, ShaderStage::Compute, TextureSampleType::Float),
+            texture_layout        (2, ShaderStage::Compute, TextureSampleType::Float),
+            storage_texture_layout(3, ShaderStage::Compute, TextureFormat::R32Float),
+            sampler_layout        (4, ShaderStage::Compute),
+        };
+
+        BindGroupLayoutDescriptor bgl_desc = {};
+        bgl_desc.entryCount = static_cast<uint32_t>(foam_entries.size());
+        bgl_desc.entries    = foam_entries.data();
+        foam_bgl            = device.createBindGroupLayout(bgl_desc);
+
+        PipelineLayoutDescriptor layout_desc = {};
+        layout_desc.bindGroupLayoutCount = 1;
+        layout_desc.bindGroupLayouts     = reinterpret_cast<WGPUBindGroupLayout*>(&foam_bgl);
+        foam_layout                      = device.createPipelineLayout(layout_desc);
+
+        ComputePipelineDescriptor pipe_desc;
+        pipe_desc.layout                = foam_layout;
+        pipe_desc.compute.module        = foam_module;
+        pipe_desc.compute.entryPoint    = "computeFoam";
+        pipe_desc.compute.constantCount = 0;
+        pipe_desc.compute.constants     = nullptr;
+        foam_pipeline = device.createComputePipeline(pipe_desc);
+
+        foam_module.release();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +738,10 @@ void Application::run_compute()
         std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(ComputeUniforms));
     }
     queue.writeBuffer(compute_uniform_buffer, 0, ubuf.data(), ubuf.size());
+
+    FoamUniforms fu{ uniforms.lambda, 0.9f, 0.003f,
+                     static_cast<float>(TEXTURE_SIZE), static_cast<float>(FOAM_SIZE) };
+    queue.writeBuffer(foam_uniform_buffer, 0, &fu, sizeof(FoamUniforms));
 
     CommandEncoder encoder = device.createCommandEncoder(CommandEncoderDescriptor{});
 
@@ -694,11 +761,17 @@ void Application::run_compute()
     pass.setPipeline(fft_h_pipeline);
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
-        pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
+        pass.setBindGroup(0, h_fft_bind_groups   [1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
-        pass.setBindGroup(0, sx_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.setBindGroup(0, sx_fft_bind_groups  [1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
-        pass.setBindGroup(0, sy_fft_bind_groups[1 - s % 2], 1, &off);
+        pass.setBindGroup(0, sy_fft_bind_groups  [1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.setBindGroup(0, dx_fft_bind_groups  [1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.setBindGroup(0, dy_fft_bind_groups  [1 - s % 2], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.setBindGroup(0, fold_fft_bind_groups[1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
     }
 
@@ -709,13 +782,24 @@ void Application::run_compute()
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         int bg = (TEXTURE_LOG + s + 1) % 2;
-        pass.setBindGroup(0, h_fft_bind_groups [bg], 1, &off);
+        pass.setBindGroup(0, h_fft_bind_groups   [bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-        pass.setBindGroup(0, sx_fft_bind_groups[bg], 1, &off);
+        pass.setBindGroup(0, sx_fft_bind_groups  [bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-        pass.setBindGroup(0, sy_fft_bind_groups[bg], 1, &off);
+        pass.setBindGroup(0, sy_fft_bind_groups  [bg], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.setBindGroup(0, dx_fft_bind_groups  [bg], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.setBindGroup(0, dy_fft_bind_groups  [bg], 1, &off);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.setBindGroup(0, fold_fft_bind_groups[bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
     }
+
+    /* Foam accumulation: mark wave-breaking pixels (J < threshold), erode previous foam. */
+    pass.setPipeline(foam_pipeline);
+    pass.setBindGroup(0, foam_bind_groups[foam_frame % 2], 0, nullptr);
+    pass.dispatchWorkgroups(FOAM_SIZE / 8, FOAM_SIZE / 8, 1);
 
     pass.end();
 #ifndef WEBGPU_BACKEND_WGPU
@@ -728,6 +812,10 @@ void Application::run_compute()
     wgpuCommandBufferRelease(commands);
     wgpuCommandEncoderRelease(encoder);
 #endif
+
+    /* Point the render bind group at the foam texture just written, then advance counter. */
+    rebuild_render_bind_group(1 - static_cast<int>(foam_frame % 2));
+    foam_frame++;
 }
 
 // ---------------------------------------------------------------------------
@@ -747,11 +835,11 @@ RequiredLimits Application::get_required_limits(Adapter adapter) const
     limits.limits.maxBindGroups             = 1;
     limits.limits.maxUniformBuffersPerShaderStage = 1;
     limits.limits.maxUniformBufferBindingSize     = sizeof(MyUniforms);
-    limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE });
-    limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE });
+    limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE, FOAM_SIZE });
+    limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE, FOAM_SIZE });
     limits.limits.maxTextureArrayLayers     = 6;
-    limits.limits.maxSampledTexturesPerShaderStage  = 4;
-    limits.limits.maxStorageTexturesPerShaderStage  = 3;
+    limits.limits.maxSampledTexturesPerShaderStage  = 5;
+    limits.limits.maxStorageTexturesPerShaderStage  = 6;
     limits.limits.maxSamplersPerShaderStage         = 1;
     limits.limits.minUniformBufferOffsetAlignment  = supported.limits.minUniformBufferOffsetAlignment;
     limits.limits.minStorageBufferOffsetAlignment  = supported.limits.minStorageBufferOffsetAlignment;
@@ -796,17 +884,21 @@ void Application::init_buffers()
     buf_desc.size          = compute_uniform_stride * TEXTURE_LOG;
     buf_desc.usage         = BufferUsage::CopyDst | BufferUsage::Uniform;
     compute_uniform_buffer = device.createBuffer(buf_desc);
+
+    buf_desc.size          = sizeof(FoamUniforms);
+    buf_desc.usage         = BufferUsage::CopyDst | BufferUsage::Uniform;
+    foam_uniform_buffer    = device.createBuffer(buf_desc);
 }
 
 // ---------------------------------------------------------------------------
 // Bind group management
 // ---------------------------------------------------------------------------
 
-void Application::rebuild_render_bind_group()
+void Application::rebuild_render_bind_group(int foam_idx)
 {
     if (bind_group) bind_group.release();
 
-    std::vector<BindGroupEntry> entries(6, Default);
+    std::vector<BindGroupEntry> entries(9, Default);
     entries[0].binding = 0;
     entries[0].buffer  = uniform_buffer;
     entries[0].offset  = 0;
@@ -827,6 +919,15 @@ void Application::rebuild_render_bind_group()
     entries[5].binding     = 5;
     entries[5].textureView = slope_y_texture_views[0];
 
+    entries[6].binding     = 6;
+    entries[6].textureView = disp_x_texture_views[0];
+
+    entries[7].binding     = 7;
+    entries[7].textureView = disp_y_texture_views[0];
+
+    entries[8].binding     = 8;
+    entries[8].textureView = foam_texture_views[foam_idx];
+
     BindGroupDescriptor desc;
     desc.layout     = bind_group_layout;
     desc.entryCount = static_cast<uint32_t>(entries.size());
@@ -838,15 +939,18 @@ void Application::init_bind_groups()
 {
     // --- time_spectrum bind group ---
     {
-        std::vector<BindGroupEntry> e(6, Default);
+        std::vector<BindGroupEntry> e(9, Default);
         e[0].binding = 0;  e[0].buffer      = compute_uniform_buffer;
                            e[0].offset       = 0;
                            e[0].size         = sizeof(ComputeUniforms);
-        e[1].binding = 1;  e[1].textureView  = height_texture_views[0];   // h_out
+        e[1].binding = 1;  e[1].textureView  = height_texture_views[0];
         e[2].binding = 2;  e[2].textureView  = spectrum_texture_view;
         e[3].binding = 3;  e[3].textureView  = k_data_texture_view;
-        e[4].binding = 4;  e[4].textureView  = slope_x_texture_views[0];  // slope_x_out
-        e[5].binding = 5;  e[5].textureView  = slope_y_texture_views[0];  // slope_y_out
+        e[4].binding = 4;  e[4].textureView  = slope_x_texture_views[0];
+        e[5].binding = 5;  e[5].textureView  = slope_y_texture_views[0];
+        e[6].binding = 6;  e[6].textureView  = disp_x_texture_views[0];
+        e[7].binding = 7;  e[7].textureView  = disp_y_texture_views[0];
+        e[8].binding = 8;  e[8].textureView  = fold_texture_views[0];
 
         BindGroupDescriptor desc;
         desc.layout     = time_spectrum_bgl;
@@ -855,7 +959,7 @@ void Application::init_bind_groups()
         time_spectrum_bind_group = device.createBindGroup(desc);
     }
 
-    // --- FFT bind groups (height, slope_x, slope_y — ping-pong pairs) ---
+    // --- FFT bind groups (all 6 IFFT channels — ping-pong pairs) ---
     {
         /* 4-entry template: uniform(0), out(1), in(2), butterfly(3) */
         std::vector<BindGroupEntry> e(4, Default);
@@ -882,6 +986,30 @@ void Application::init_bind_groups()
         make_pair(height_texture_views,  h_fft_bind_groups);
         make_pair(slope_x_texture_views, sx_fft_bind_groups);
         make_pair(slope_y_texture_views, sy_fft_bind_groups);
+        make_pair(disp_x_texture_views,  dx_fft_bind_groups);
+        make_pair(disp_y_texture_views,  dy_fft_bind_groups);
+        make_pair(fold_texture_views,    fold_fft_bind_groups);
+    }
+
+    // --- foam bind groups ([i]: reads foam[i], writes foam[1-i]) ---
+    {
+        std::vector<BindGroupEntry> e(5, Default);
+        e[0].binding = 0;  e[0].buffer = foam_uniform_buffer;
+                           e[0].offset  = 0;
+                           e[0].size    = sizeof(FoamUniforms);
+        e[1].binding = 1;  e[1].textureView = fold_texture_views[0];
+        e[4].binding = 4;  e[4].sampler     = sampler;
+
+        BindGroupDescriptor desc;
+        desc.layout     = foam_bgl;
+        desc.entryCount = static_cast<uint32_t>(e.size());
+        desc.entries    = e.data();
+
+        for (int i = 0; i < 2; i++) {
+            e[2].binding = 2;  e[2].textureView = foam_texture_views[i];       /* prev */
+            e[3].binding = 3;  e[3].textureView = foam_texture_views[1 - i];   /* out  */
+            foam_bind_groups[i] = device.createBindGroup(desc);
+        }
     }
 }
 
@@ -911,6 +1039,44 @@ void Application::init_textures()
         slope_y_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
                                                       TextureFormat::RGBA32Float, ping_pong_usage);
         slope_y_texture_views[i] = create_view_2d(slope_y_textures[i], TextureFormat::RGBA32Float);
+    }
+
+    /* Ping-pong choppy displacement textures (Dx, Dy) and Jacobian fold. */
+    for (int i = 0; i < 2; i++) {
+        disp_x_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                     TextureFormat::RGBA32Float, ping_pong_usage);
+        disp_x_texture_views[i] = create_view_2d(disp_x_textures[i], TextureFormat::RGBA32Float);
+        disp_y_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                     TextureFormat::RGBA32Float, ping_pong_usage);
+        disp_y_texture_views[i] = create_view_2d(disp_y_textures[i], TextureFormat::RGBA32Float);
+        fold_textures[i]        = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                     TextureFormat::RGBA32Float, ping_pong_usage);
+        fold_texture_views[i]   = create_view_2d(fold_textures[i], TextureFormat::RGBA32Float);
+    }
+
+    /* Foam ping-pong textures (R32Float, writable by compute + readable by render).
+       CopyDst is required for the explicit zero-fill below — D3D12 does not guarantee
+       zero-initialization for StorageBinding-only textures in practice. */
+    const WGPUTextureUsageFlags foam_usage =
+        TextureUsage::TextureBinding | TextureUsage::StorageBinding | TextureUsage::CopyDst;
+    {
+        std::vector<float> zeros(FOAM_SIZE * FOAM_SIZE, 0.0f);
+        for (int i = 0; i < 2; i++) {
+            foam_textures[i]      = create_texture_2d(device, FOAM_SIZE, FOAM_SIZE,
+                                                       TextureFormat::R32Float, foam_usage);
+            foam_texture_views[i] = create_view_2d(foam_textures[i], TextureFormat::R32Float);
+
+            ImageCopyTexture dst = {};
+            dst.texture  = foam_textures[i];
+            dst.mipLevel = 0;
+            dst.origin   = { 0, 0, 0 };
+            dst.aspect   = TextureAspect::All;
+            TextureDataLayout layout = {};
+            layout.bytesPerRow  = FOAM_SIZE * sizeof(float);
+            layout.rowsPerImage = FOAM_SIZE;
+            Extent3D extent = { FOAM_SIZE, FOAM_SIZE, 1 };
+            queue.writeTexture(dst, zeros.data(), zeros.size() * sizeof(float), layout, extent);
+        }
     }
 
     /* Initial h0(k) spectrum — generated once on the CPU, uploaded, then read-only. */
@@ -986,9 +1152,9 @@ void Application::init_textures()
 
     /* Sampler shared by both the water shader and the skybox. */
     SamplerDescriptor sampler_desc;
-    sampler_desc.addressModeU  = AddressMode::ClampToEdge;
-    sampler_desc.addressModeV  = AddressMode::ClampToEdge;
-    sampler_desc.addressModeW  = AddressMode::ClampToEdge;
+    sampler_desc.addressModeU  = AddressMode::Repeat;
+    sampler_desc.addressModeV  = AddressMode::Repeat;
+    sampler_desc.addressModeW  = AddressMode::Repeat;
     sampler_desc.magFilter     = FilterMode::Linear;
     sampler_desc.minFilter     = FilterMode::Linear;
     sampler_desc.mipmapFilter  = MipmapFilterMode::Linear;

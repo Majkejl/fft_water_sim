@@ -17,31 +17,38 @@ struct MyUniforms {
 	eye:        vec3f,
 	N:          f32,
 	patch_size: f32,
+	lambda:     f32,
 }
 
-@group(0) @binding(0) var<uniform> u:           MyUniforms;
+@group(0) @binding(0) var<uniform> u:            MyUniforms;
 @group(0) @binding(1) var          heightTexture: texture_2d<f32>;
-@group(0) @binding(2) var          envSampler:   sampler;
-@group(0) @binding(3) var          envMap:       texture_cube<f32>;
-@group(0) @binding(4) var          slope_x_tex:  texture_2d<f32>;
-@group(0) @binding(5) var          slope_y_tex:  texture_2d<f32>;
+@group(0) @binding(2) var          envSampler:    sampler;
+@group(0) @binding(3) var          envMap:        texture_cube<f32>;
+@group(0) @binding(4) var          slope_x_tex:   texture_2d<f32>;
+@group(0) @binding(5) var          slope_y_tex:   texture_2d<f32>;
+@group(0) @binding(6) var          disp_x_tex:    texture_2d<f32>;
+@group(0) @binding(7) var          disp_y_tex:    texture_2d<f32>;
+@group(0) @binding(8) var          foam_tex:      texture_2d<f32>;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
 	var out: VertexOutput;
 
-	let uv  = in.uv;
-	let N   = u.N;
-	let inv = 1.0 / (N * N);
+	let uv       = in.uv;
+	let N        = u.N;
+	let inv      = 1.0 / (N * N);
+	let scale_xy = 2.0 / u.patch_size;
 
-	/* textureLoad is legal in vertex shaders (no implicit derivatives). */
-	let h = textureLoad(heightTexture, vec2i(uv * N), 0).r * inv;
+	let h  = textureLoad(heightTexture, vec2i(uv * N), 0).r * inv;
+	let dx = textureLoad(disp_x_tex,   vec2i(uv * N), 0).r * inv * scale_xy;
+	let dy = textureLoad(disp_y_tex,   vec2i(uv * N), 0).r * inv * scale_xy;
 
-	let localPos  = vec3f(uv * 2.0 - 1.0, h);
+	let base      = uv * 2.0 - 1.0;
+	let localPos  = vec3f(base.x + u.lambda * dx, base.y + u.lambda * dy, h);
 	let worldPos4 = u.model * vec4f(localPos, 1.0);
 
 	out.fs_position = worldPos4.xyz;
-	out.fs_normal   = vec3f(0.0);   /* populated in fragment shader from slope textures */
+	out.fs_normal   = vec3f(0.0);
 	out.fs_uv       = uv;
 	out.position    = u.proj * u.view * worldPos4;
 
@@ -51,16 +58,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
-	let inv     = 1.0 / (u.N * u.N);
-	let sx      = textureSample(slope_x_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
-	let sy      = textureSample(slope_y_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
-	let N       = normalize(vec3f(-sx, -sy, 1.0));
+	let inv = 1.0 / (u.N * u.N);
+	let sx  = textureSample(slope_x_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
+	let sy  = textureSample(slope_y_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
+	let N   = normalize(vec3f(-sx, -sy, 1.0));
 
 	let lightPos = vec3f(3.0, 4.0, 2.0);
 
 	let L = normalize(lightPos - in.fs_position);
 	let V = normalize(u.eye - in.fs_position);
-
 	let H = normalize(L + V);
 
 	let diff = max(dot(N, L), 0.0);
@@ -76,8 +82,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let fresnel = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
 
 	let R        = reflect(-V, N);
-	/* Z-up world → Y-up cubemap: (x,y,z) → (x,z,-y) */
 	let envColor = textureSample(envMap, envSampler, vec3f(R.x, R.z, -R.y)).rgb;
 
-	return vec4f(ambient + diffuse + specular + fresnel * envColor, 1.0);
+	let lit        = ambient + diffuse + specular + fresnel * envColor;
+	let foam       = textureSample(foam_tex, envSampler, in.fs_uv).r;
+	let foam_color = vec3f(0.9, 0.95, 1.0);
+
+	return vec4f(mix(lit, foam_color, foam * 0.85), 1.0);
 }

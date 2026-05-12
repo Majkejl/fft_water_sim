@@ -22,4 +22,12 @@ public:
         const std::filesystem::path& path,
         std::vector<uint8_t>&        face_pixels,
         int&                         face_size);
+
+    /* Loads any image format supported by stb_image (PNG, JPG, …) as RGBA8.
+       Returns false on failure; width and height are set on success. */
+    static bool load_image(
+        const std::filesystem::path& path,
+        std::vector<uint8_t>&        pixels,
+        int&                         width,
+        int&                         height);
 };

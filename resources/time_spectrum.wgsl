@@ -13,13 +13,12 @@ struct c_Uniforms {
 @group(0) @binding(5) var          slope_y_out:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(6) var          disp_x_out:   texture_storage_2d<rgba32float, write>;
 @group(0) @binding(7) var          disp_y_out:   texture_storage_2d<rgba32float, write>;
-@group(0) @binding(8) var          fold_out:     texture_storage_2d<rgba32float, write>;
 
 fn complex_mul(a: vec2f, b: vec2f) -> vec2f {
     return vec2f(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
-@compute @workgroup_size(32, 32, 1)
+@compute @workgroup_size(16, 16, 1)
 fn timeSpectrum(@builtin(global_invocation_id) id: vec3<u32>) {
     let N     = u.N;
     let coord = vec2i(id.xy);
@@ -48,18 +47,13 @@ fn timeSpectrum(@builtin(global_invocation_id) id: vec3<u32>) {
     let sy = vec2f(-ky * h.y, ky * h.x);
 
     /* Choppy displacement spectra: i*(k/|k|)*H */
-    let k_len = length(vec2(kx,ky));
-    let inv_k = kdata.a;
+    let inv_k = select(0.0, 1.0 / kdata.a, kdata.a > 0.001);
     let dx    = vec2f(-kx * inv_k * h.y,  kx * inv_k * h.x);
     let dy    = vec2f(-ky * inv_k * h.y,  ky * inv_k * h.x);
-
-    /* Jacobian fold spectrum: ∂Dx/∂x + ∂Dy/∂y = -|k|*H */
-    let fd    = vec2f(-k_len * h.x, -k_len * h.y);
 
     textureStore(h_out,       coord, vec4f(h,  0.0, 1.0));
     textureStore(slope_x_out, coord, vec4f(sx, 0.0, 1.0));
     textureStore(slope_y_out, coord, vec4f(sy, 0.0, 1.0));
     textureStore(disp_x_out,  coord, vec4f(dx, 0.0, 1.0));
     textureStore(disp_y_out,  coord, vec4f(dy, 0.0, 1.0));
-    textureStore(fold_out,    coord, vec4f(fd, 0.0, 1.0));
 }

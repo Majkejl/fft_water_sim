@@ -8,12 +8,35 @@ project(
 include(FetchContent)
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG master 
+    GIT_TAG master
+    UPDATE_DISCONNECTED TRUE
 )
 FetchContent_GetProperties(stb)
 if(NOT stb_POPULATED)
     FetchContent_Populate(stb)
 endif()
+
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.90.1
+    UPDATE_DISCONNECTED TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui_lib STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
+)
+target_include_directories(imgui_lib PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends 
+)
+target_link_libraries(imgui_lib PUBLIC glfw webgpu)
     
 if (NOT EMSCRIPTEN)
     add_subdirectory(glfw)
@@ -48,7 +71,7 @@ target_include_directories(fft_water_sim
 
 
 
-target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu glm)
+target_link_libraries(fft_water_sim PRIVATE webgpu glfw glfw3webgpu glm imgui_lib)
 
 # We add an option to enable different settings when developing the app than
 # when distributing it.
@@ -94,10 +117,11 @@ endif()
 
 if (EMSCRIPTEN)
 	set_target_properties(fft_water_sim PROPERTIES SUFFIX ".html")
-    target_link_options(fft_water_sim PRIVATE 
+    target_link_options(fft_water_sim PRIVATE
         -sALLOW_MEMORY_GROWTH
         -sASYNCIFY
         --preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+        --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/shell.html"
     )
 endif()
 

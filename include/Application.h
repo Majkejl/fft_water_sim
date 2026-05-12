@@ -7,6 +7,10 @@
 #include <glfw3webgpu.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_wgpu.h>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -30,8 +34,8 @@ struct MyUniforms {
     float     N;           /* texture resolution (TEXTURE_SIZE) as float */
     float     patch_size;  /* physical ocean patch width in metres */
     float     lambda;      /* choppiness / Jacobian scale */
-    float     _pad3;
-    float     _pad4;
+    float     _pad0;
+    float     _pad1;
 };
 
 /* Per-dispatch compute uniforms written into the dynamic-offset uniform buffer.
@@ -46,10 +50,10 @@ struct ComputeUniforms {
 /* Per-frame uniforms for the foam compute shader. */
 struct FoamUniforms {
     float lambda;
-    float threshold;
+    float threshold;  /* J breaking point — biasedJ = max(0, -(J - threshold)) */
     float erosion;
-    float fft_n;   /* TEXTURE_SIZE — normalisation divisor (N²) */
-    float foam_n;  /* FOAM_SIZE   — maps foam pixels to fold UV */
+    float fft_n;      /* TEXTURE_SIZE — normalisation divisor (N²) */
+    float foam_add;   /* proportional accumulation scale */
     float _pad0, _pad1, _pad2;
 };
 
@@ -93,7 +97,7 @@ class Application
     wgpu::Buffer uniform_buffer;          /* render-side MyUniforms */
     wgpu::Buffer compute_uniform_buffer;  /* ComputeUniforms × TEXTURE_LOG slots */
     uint32_t     compute_uniform_stride;  /* 256-byte aligned stride for dynamic offsets */
-    wgpu::Buffer foam_uniform_buffer;     /* FoamUniforms (16 bytes, written each frame) */
+    wgpu::Buffer foam_uniform_buffer;     /* FoamUniforms (32 bytes, written each frame) */
 
     // --- render-side bind group ---
     wgpu::BindGroup       bind_group;
@@ -105,14 +109,13 @@ class Application
     wgpu::BindGroupLayout  time_spectrum_bgl;
     wgpu::PipelineLayout   time_spectrum_layout;
 
-    // --- FFT compute bind groups (ping-pong pairs for all 6 IFFT channels) ---
+    // --- FFT compute bind groups (ping-pong pairs for all 5 IFFT channels) ---
     /* [0]: out=tex[0], in=tex[1]   [1]: out=tex[1], in=tex[0] */
     wgpu::BindGroup       h_fft_bind_groups[2];
     wgpu::BindGroup       sx_fft_bind_groups[2];
     wgpu::BindGroup       sy_fft_bind_groups[2];
     wgpu::BindGroup       dx_fft_bind_groups[2];
     wgpu::BindGroup       dy_fft_bind_groups[2];
-    wgpu::BindGroup       fold_fft_bind_groups[2];
     wgpu::BindGroupLayout fft_bgl;
     wgpu::PipelineLayout  fft_layout;
 
@@ -134,8 +137,6 @@ class Application
     wgpu::TextureView disp_x_texture_views[2];
     wgpu::Texture     disp_y_textures[2];      /* ping-pong for Dy choppy displacement */
     wgpu::TextureView disp_y_texture_views[2];
-    wgpu::Texture     fold_textures[2];        /* ping-pong for Jacobian fold field */
-    wgpu::TextureView fold_texture_views[2];
     wgpu::Texture     foam_textures[2];        /* foam accumulation ping-pong (R32Float) */
     wgpu::TextureView foam_texture_views[2];
     wgpu::Texture     spectrum_texture;        /* initial h0(k) spectrum (RGBA32Float) */
@@ -144,6 +145,10 @@ class Application
     wgpu::TextureView butterfly_texture_view;
     wgpu::Texture     k_data_texture;          /* wave-vector kx/ky and dispersion omega */
     wgpu::TextureView k_data_texture_view;
+
+    // --- foam detail texture ---
+    wgpu::Texture     foam_detail_texture;
+    wgpu::TextureView foam_detail_texture_view;
 
     // --- environment / skybox ---
     wgpu::Texture     cubemap_texture;
@@ -160,6 +165,9 @@ class Application
     double last_mouse_x   = 0.0;
     double last_mouse_y   = 0.0;
 
+    // --- ImGui UI panels (each lambda renders one panel window) ---
+    std::vector<std::function<void()>> ui_panels;
+
 private:
     wgpu::TextureView    get_next_surface_view();
     wgpu::RequiredLimits get_required_limits(wgpu::Adapter adapter) const;
@@ -172,6 +180,7 @@ private:
     void init_cubemap();
     void rebuild_render_bind_group(int foam_idx = 0);
     void run_compute();
+    void render_ui(wgpu::RenderPassEncoder pass);
 
     /* GLFW input callbacks — registered in the constructor via glfwSetWindowUserPointer. */
     static void on_mouse_button(GLFWwindow* w, int button, int action, int mods);

@@ -6,6 +6,7 @@
 #include "Pipelines.h"
 #include "Textures.h"
 #include <algorithm>
+#include <numeric>
 #include <random>
 #include <cmath>
 #include <cstring>
@@ -18,10 +19,10 @@ using namespace texture_helpers;
 
 static constexpr uint32_t   MESH_SIZE      = 256;
 static constexpr uint32_t   TEXTURE_SIZE   = 256;
-static constexpr uint32_t   FOAM_SIZE      = 1024;
 static constexpr uint32_t   TEXTURE_LOG    = 8;
 static constexpr float      PATCH_SIZE     = 64.f;
-static constexpr double     WAVE_AMPLITUDE = 10.;
+static constexpr double     WAVE_AMPLITUDE = 20.;
+static constexpr int        CUBEMAP_INDEX  = 22;
 
 // ---------------------------------------------------------------------------
 // Internal helpers (ocean data generation)
@@ -109,12 +110,12 @@ void fill_textures(std::vector<float>& spectrum, std::vector<float>& k_data)
             k_data[4 * i + 0] = kx_phys;
             k_data[4 * i + 1] = ky_phys;
             k_data[4 * i + 2] = omega;
-            k_data[4 * i + 3] = (k_len > 0.001) ? 1 / k_len : 0;
-            
+            k_data[4 * i + 3] = k_len;
+
             k_data[4 * j + 0] = -kx_phys;
             k_data[4 * j + 1] = -ky_phys;
             k_data[4 * j + 2] = omega;
-            k_data[4 * j + 3] = (k_len > 0.001) ? 1 / k_len : 0;
+            k_data[4 * j + 3] = k_len;
 
             double scale = std::sqrt(jonswap(kx_phys, ky_phys, 250000.0, 40.0, 0.0) * 0.5)
                          * WAVE_AMPLITUDE;
@@ -195,16 +196,39 @@ Application::Application(int w, int h) : width(w), height(h)
 
     adapter.release();
 
+    /* Camera — positioned at ~(PATCH_SIZE, PATCH_SIZE, 115m), looking at origin. */
+    camera.theta  = glm::quarter_pi<float>();
+    camera.phi    = 0.30f;
+    camera.radius = static_cast<float>(PATCH_SIZE) * 1.5f;
+
     init_pipeline();
     init_compute();
     init_buffers();
     init_textures();
     init_bind_groups();
     init_cubemap();
+
+    /* ImGui — must come after all WebGPU resources are created. */
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    /* true = chain existing GLFW callbacks so orbit/zoom still work. */
+    ImGui_ImplGlfw_InitForOther(window, true);
+
+    
+    ImGui_ImplWGPU_Init(
+        device, 2, static_cast<WGPUTextureFormat>(surface_format), WGPUTextureFormat_Depth24Plus
+    );
+
 }
 
 Application::~Application()
 {
+    ImGui_ImplWGPU_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
     for (int i = 0; i < 2; i++) {
         height_texture_views[i].release();
         height_textures[i].destroy();
@@ -221,9 +245,6 @@ Application::~Application()
         disp_y_texture_views[i].release();
         disp_y_textures[i].destroy();
         disp_y_textures[i].release();
-        fold_texture_views[i].release();
-        fold_textures[i].destroy();
-        fold_textures[i].release();
         foam_texture_views[i].release();
         foam_textures[i].destroy();
         foam_textures[i].release();
@@ -232,7 +253,6 @@ Application::~Application()
         sy_fft_bind_groups[i].release();
         dx_fft_bind_groups[i].release();
         dy_fft_bind_groups[i].release();
-        fold_fft_bind_groups[i].release();
         foam_bind_groups[i].release();
     }
 
@@ -249,6 +269,9 @@ Application::~Application()
     k_data_texture_view.release();
     k_data_texture.destroy();
     k_data_texture.release();
+
+    if (foam_detail_texture_view) foam_detail_texture_view.release();
+    if (foam_detail_texture)      { foam_detail_texture.destroy(); foam_detail_texture.release(); }
 
     if (cubemap_texture_view) cubemap_texture_view.release();
     if (cubemap_texture)      { cubemap_texture.destroy(); cubemap_texture.release(); }
@@ -356,12 +379,14 @@ void Application::main_loop()
     pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer.getSize());
     pass.setIndexBuffer(index_buffer, IndexFormat::Uint32, 0, index_buffer.getSize());
     pass.setBindGroup(0, bind_group, 0, nullptr);
-    pass.drawIndexed(index_count, 1, 0, 0, 0);
+    pass.drawIndexed(index_count, 9, 0, 0, 0);
 
     // Skybox — drawn last, depth LessEqual, no depth write; fills background only
     pass.setPipeline(skybox_pipeline);
     pass.setBindGroup(0, bind_group, 0, nullptr);
     pass.draw(3, 1, 0, 0);
+
+    render_ui(pass);
 
     pass.end();
     pass.release();
@@ -394,6 +419,7 @@ bool Application::is_running()
 
 void Application::on_mouse_button(GLFWwindow* w, int button, int action, int /*mods*/)
 {
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) return;
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         app->mouse_dragging = (action == GLFW_PRESS);
@@ -404,6 +430,7 @@ void Application::on_mouse_button(GLFWwindow* w, int button, int action, int /*m
 
 void Application::on_cursor_pos(GLFWwindow* w, double x, double y)
 {
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) return;
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
     if (!app->mouse_dragging) return;
     float dx = static_cast<float>(x - app->last_mouse_x);
@@ -415,6 +442,7 @@ void Application::on_cursor_pos(GLFWwindow* w, double x, double y)
 
 void Application::on_scroll(GLFWwindow* w, double /*dx*/, double dy)
 {
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) return;
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(w));
     app->camera.zoom(static_cast<float>(dy));
 }
@@ -473,6 +501,7 @@ void Application::init_pipeline()
         texture_layout (6, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
         texture_layout (7, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
         texture_layout (8, ShaderStage::Fragment, TextureSampleType::Float),
+        texture_layout (9, ShaderStage::Fragment, TextureSampleType::Float),
     };
 
     BindGroupLayoutDescriptor bgl_desc = {};
@@ -627,7 +656,6 @@ void Application::init_compute()
             storage_texture_layout(5, ShaderStage::Compute),
             storage_texture_layout(6, ShaderStage::Compute),
             storage_texture_layout(7, ShaderStage::Compute),
-            storage_texture_layout(8, ShaderStage::Compute),
         };
 
         BindGroupLayoutDescriptor bgl_desc = {};
@@ -695,10 +723,10 @@ void Application::init_compute()
 
         std::vector<BindGroupLayoutEntry> foam_entries = {
             uniform_layout        (0, ShaderStage::Compute, false, sizeof(FoamUniforms)),
-            texture_layout        (1, ShaderStage::Compute, TextureSampleType::Float),
-            texture_layout        (2, ShaderStage::Compute, TextureSampleType::Float),
-            storage_texture_layout(3, ShaderStage::Compute, TextureFormat::R32Float),
-            sampler_layout        (4, ShaderStage::Compute),
+            texture_layout        (1, ShaderStage::Compute, TextureSampleType::Float),              // foam_prev
+            storage_texture_layout(2, ShaderStage::Compute, TextureFormat::R32Float),               // foam_out
+            texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),  // disp_x
+            texture_layout        (4, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),  // disp_y
         };
 
         BindGroupLayoutDescriptor bgl_desc = {};
@@ -724,6 +752,23 @@ void Application::init_compute()
 }
 
 // ---------------------------------------------------------------------------
+// ImGui rendering
+// ---------------------------------------------------------------------------
+
+void Application::render_ui(wgpu::RenderPassEncoder pass)
+{
+    ImGui_ImplWGPU_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    for (auto& panel : ui_panels)
+        panel();
+
+    ImGui::Render();
+    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass);
+}
+
+// ---------------------------------------------------------------------------
 // Compute dispatch
 // ---------------------------------------------------------------------------
 
@@ -739,8 +784,8 @@ void Application::run_compute()
     }
     queue.writeBuffer(compute_uniform_buffer, 0, ubuf.data(), ubuf.size());
 
-    FoamUniforms fu{ uniforms.lambda, 0.9f, 0.003f,
-                     static_cast<float>(TEXTURE_SIZE), static_cast<float>(FOAM_SIZE) };
+    FoamUniforms fu{ uniforms.lambda, 0.96f, 0.985f,
+                     static_cast<float>(TEXTURE_SIZE), 0.9f, 0., 0., 0. };
     queue.writeBuffer(foam_uniform_buffer, 0, &fu, sizeof(FoamUniforms));
 
     CommandEncoder encoder = device.createCommandEncoder(CommandEncoderDescriptor{});
@@ -753,7 +798,7 @@ void Application::run_compute()
        Outputs land in height[0], slope_x[0], slope_y[0] (slot 0 = stage 0, time t). */
     pass.setPipeline(time_spectrum_pipeline);
     pass.setBindGroup(0, time_spectrum_bind_group, 0, nullptr);
-    pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 32, 1);
+    pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 16, 1);
 
     /* Horizontal IFFT for all three textures, 8 stages each.
        Ping-pong index: stage s uses bind_groups[1 - s%2] so output lands in [0] after
@@ -762,17 +807,15 @@ void Application::run_compute()
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         pass.setBindGroup(0, h_fft_bind_groups   [1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
         pass.setBindGroup(0, sx_fft_bind_groups  [1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
         pass.setBindGroup(0, sy_fft_bind_groups  [1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
         pass.setBindGroup(0, dx_fft_bind_groups  [1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
         pass.setBindGroup(0, dy_fft_bind_groups  [1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
-        pass.setBindGroup(0, fold_fft_bind_groups[1 - s % 2], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 32, TEXTURE_SIZE / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
     }
 
     /* Vertical IFFT — transposed dispatch. After TEXTURE_LOG horizontal stages, the result
@@ -783,23 +826,21 @@ void Application::run_compute()
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         int bg = (TEXTURE_LOG + s + 1) % 2;
         pass.setBindGroup(0, h_fft_bind_groups   [bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
         pass.setBindGroup(0, sx_fft_bind_groups  [bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
         pass.setBindGroup(0, sy_fft_bind_groups  [bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
         pass.setBindGroup(0, dx_fft_bind_groups  [bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
         pass.setBindGroup(0, dy_fft_bind_groups  [bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
-        pass.setBindGroup(0, fold_fft_bind_groups[bg], 1, &off);
-        pass.dispatchWorkgroups(TEXTURE_SIZE / 32, TEXTURE_SIZE / 2 / 32, 1);
+        pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
     }
 
     /* Foam accumulation: mark wave-breaking pixels (J < threshold), erode previous foam. */
     pass.setPipeline(foam_pipeline);
     pass.setBindGroup(0, foam_bind_groups[foam_frame % 2], 0, nullptr);
-    pass.dispatchWorkgroups(FOAM_SIZE / 8, FOAM_SIZE / 8, 1);
+    pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 16, 1);
 
     pass.end();
 #ifndef WEBGPU_BACKEND_WGPU
@@ -828,23 +869,23 @@ RequiredLimits Application::get_required_limits(Adapter adapter) const
     adapter.getLimits(&supported);
 
     RequiredLimits limits = Default;
-    limits.limits.maxVertexAttributes       = 2;
+    limits.limits.maxVertexAttributes       = 3;
     limits.limits.maxVertexBuffers          = 1;
     limits.limits.maxBufferSize             = static_cast<uint64_t>(MESH_SIZE) * MESH_SIZE * 6 * sizeof(uint32_t);
     limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
-    limits.limits.maxBindGroups             = 1;
+    limits.limits.maxBindGroups             = 2;
     limits.limits.maxUniformBuffersPerShaderStage = 1;
     limits.limits.maxUniformBufferBindingSize     = sizeof(MyUniforms);
-    limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE, FOAM_SIZE });
-    limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE, FOAM_SIZE });
+    limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE });
+    limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE });
     limits.limits.maxTextureArrayLayers     = 6;
-    limits.limits.maxSampledTexturesPerShaderStage  = 5;
+    limits.limits.maxSampledTexturesPerShaderStage  = 6;
     limits.limits.maxStorageTexturesPerShaderStage  = 6;
     limits.limits.maxSamplersPerShaderStage         = 1;
     limits.limits.minUniformBufferOffsetAlignment  = supported.limits.minUniformBufferOffsetAlignment;
     limits.limits.minStorageBufferOffsetAlignment  = supported.limits.minStorageBufferOffsetAlignment;
     limits.limits.maxComputeWorkgroupSizeX         = 1024;
-    limits.limits.maxComputeWorkgroupSizeY         = 32;
+    limits.limits.maxComputeWorkgroupSizeY         = 16;
     limits.limits.maxComputeWorkgroupSizeZ         = 1;
     limits.limits.maxComputeInvocationsPerWorkgroup = 1024;
     return limits;
@@ -898,7 +939,7 @@ void Application::rebuild_render_bind_group(int foam_idx)
 {
     if (bind_group) bind_group.release();
 
-    std::vector<BindGroupEntry> entries(9, Default);
+    std::vector<BindGroupEntry> entries(10, Default);
     entries[0].binding = 0;
     entries[0].buffer  = uniform_buffer;
     entries[0].offset  = 0;
@@ -928,6 +969,9 @@ void Application::rebuild_render_bind_group(int foam_idx)
     entries[8].binding     = 8;
     entries[8].textureView = foam_texture_views[foam_idx];
 
+    entries[9].binding     = 9;
+    entries[9].textureView = foam_detail_texture_view;
+
     BindGroupDescriptor desc;
     desc.layout     = bind_group_layout;
     desc.entryCount = static_cast<uint32_t>(entries.size());
@@ -939,7 +983,7 @@ void Application::init_bind_groups()
 {
     // --- time_spectrum bind group ---
     {
-        std::vector<BindGroupEntry> e(9, Default);
+        std::vector<BindGroupEntry> e(8, Default);
         e[0].binding = 0;  e[0].buffer      = compute_uniform_buffer;
                            e[0].offset       = 0;
                            e[0].size         = sizeof(ComputeUniforms);
@@ -950,7 +994,6 @@ void Application::init_bind_groups()
         e[5].binding = 5;  e[5].textureView  = slope_y_texture_views[0];
         e[6].binding = 6;  e[6].textureView  = disp_x_texture_views[0];
         e[7].binding = 7;  e[7].textureView  = disp_y_texture_views[0];
-        e[8].binding = 8;  e[8].textureView  = fold_texture_views[0];
 
         BindGroupDescriptor desc;
         desc.layout     = time_spectrum_bgl;
@@ -959,7 +1002,7 @@ void Application::init_bind_groups()
         time_spectrum_bind_group = device.createBindGroup(desc);
     }
 
-    // --- FFT bind groups (all 6 IFFT channels — ping-pong pairs) ---
+    // --- FFT bind groups (all 5 IFFT channels — ping-pong pairs) ---
     {
         /* 4-entry template: uniform(0), out(1), in(2), butterfly(3) */
         std::vector<BindGroupEntry> e(4, Default);
@@ -988,17 +1031,16 @@ void Application::init_bind_groups()
         make_pair(slope_y_texture_views, sy_fft_bind_groups);
         make_pair(disp_x_texture_views,  dx_fft_bind_groups);
         make_pair(disp_y_texture_views,  dy_fft_bind_groups);
-        make_pair(fold_texture_views,    fold_fft_bind_groups);
     }
 
     // --- foam bind groups ([i]: reads foam[i], writes foam[1-i]) ---
     {
         std::vector<BindGroupEntry> e(5, Default);
-        e[0].binding = 0;  e[0].buffer = foam_uniform_buffer;
-                           e[0].offset  = 0;
-                           e[0].size    = sizeof(FoamUniforms);
-        e[1].binding = 1;  e[1].textureView = fold_texture_views[0];
-        e[4].binding = 4;  e[4].sampler     = sampler;
+        e[0].binding = 0;  e[0].buffer      = foam_uniform_buffer;
+                           e[0].offset       = 0;
+                           e[0].size         = sizeof(FoamUniforms);
+        e[3].binding = 3;  e[3].textureView  = disp_x_texture_views[0];
+        e[4].binding = 4;  e[4].textureView  = disp_y_texture_views[0];
 
         BindGroupDescriptor desc;
         desc.layout     = foam_bgl;
@@ -1006,8 +1048,8 @@ void Application::init_bind_groups()
         desc.entries    = e.data();
 
         for (int i = 0; i < 2; i++) {
-            e[2].binding = 2;  e[2].textureView = foam_texture_views[i];       /* prev */
-            e[3].binding = 3;  e[3].textureView = foam_texture_views[1 - i];   /* out  */
+            e[1].binding = 1;  e[1].textureView = foam_texture_views[i];       /* prev */
+            e[2].binding = 2;  e[2].textureView = foam_texture_views[1 - i];   /* out  */
             foam_bind_groups[i] = device.createBindGroup(desc);
         }
     }
@@ -1049,9 +1091,6 @@ void Application::init_textures()
         disp_y_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
                                                      TextureFormat::RGBA32Float, ping_pong_usage);
         disp_y_texture_views[i] = create_view_2d(disp_y_textures[i], TextureFormat::RGBA32Float);
-        fold_textures[i]        = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                     TextureFormat::RGBA32Float, ping_pong_usage);
-        fold_texture_views[i]   = create_view_2d(fold_textures[i], TextureFormat::RGBA32Float);
     }
 
     /* Foam ping-pong textures (R32Float, writable by compute + readable by render).
@@ -1060,9 +1099,9 @@ void Application::init_textures()
     const WGPUTextureUsageFlags foam_usage =
         TextureUsage::TextureBinding | TextureUsage::StorageBinding | TextureUsage::CopyDst;
     {
-        std::vector<float> zeros(FOAM_SIZE * FOAM_SIZE, 0.0f);
+        std::vector<float> zeros(TEXTURE_SIZE * TEXTURE_SIZE, 0.0f);
         for (int i = 0; i < 2; i++) {
-            foam_textures[i]      = create_texture_2d(device, FOAM_SIZE, FOAM_SIZE,
+            foam_textures[i]      = create_texture_2d(device, TEXTURE_SIZE, TEXTURE_SIZE,
                                                        TextureFormat::R32Float, foam_usage);
             foam_texture_views[i] = create_view_2d(foam_textures[i], TextureFormat::R32Float);
 
@@ -1072,9 +1111,9 @@ void Application::init_textures()
             dst.origin   = { 0, 0, 0 };
             dst.aspect   = TextureAspect::All;
             TextureDataLayout layout = {};
-            layout.bytesPerRow  = FOAM_SIZE * sizeof(float);
-            layout.rowsPerImage = FOAM_SIZE;
-            Extent3D extent = { FOAM_SIZE, FOAM_SIZE, 1 };
+            layout.bytesPerRow  = TEXTURE_SIZE * sizeof(float);
+            layout.rowsPerImage = TEXTURE_SIZE;
+            Extent3D extent = { TEXTURE_SIZE, TEXTURE_SIZE, 1 };
             queue.writeTexture(dst, zeros.data(), zeros.size() * sizeof(float), layout, extent);
         }
     }
@@ -1163,6 +1202,38 @@ void Application::init_textures()
     sampler_desc.compare       = CompareFunction::Undefined;
     sampler_desc.maxAnisotropy = 1;
     sampler = device.createSampler(sampler_desc);
+
+    /* Foam detail texture (tiling RGBA8, used as a stylistic multiplier in the water shader). */
+    {
+        std::vector<uint8_t> pixels;
+        int fw = 0, fh = 0;
+        if (!ResourceManager::load_image(RESOURCE_DIR "/foam_detail.jpg", pixels, fw, fh)) {
+            std::cerr << "Failed to load foam_detail.jpg\n";
+        } else {
+            TextureDescriptor td;
+            td.dimension       = TextureDimension::_2D;
+            td.format          = TextureFormat::RGBA8Unorm;
+            td.size            = { static_cast<uint32_t>(fw), static_cast<uint32_t>(fh), 1 };
+            td.mipLevelCount   = 1;
+            td.sampleCount     = 1;
+            td.usage           = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+            td.viewFormatCount = 0;
+            td.viewFormats     = nullptr;
+            foam_detail_texture      = device.createTexture(td);
+            foam_detail_texture_view = create_view_2d(foam_detail_texture, TextureFormat::RGBA8Unorm);
+
+            ImageCopyTexture dst = {};
+            dst.texture  = foam_detail_texture;
+            dst.mipLevel = 0;
+            dst.origin   = { 0, 0, 0 };
+            dst.aspect   = TextureAspect::All;
+            TextureDataLayout layout = {};
+            layout.bytesPerRow  = static_cast<uint32_t>(fw) * 4;
+            layout.rowsPerImage = static_cast<uint32_t>(fh);
+            Extent3D extent = { static_cast<uint32_t>(fw), static_cast<uint32_t>(fh), 1 };
+            queue.writeTexture(dst, pixels.data(), pixels.size(), layout, extent);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,7 +1250,7 @@ void Application::init_cubemap()
     std::sort(cubemap_paths.begin(), cubemap_paths.end());
 
     if (!cubemap_paths.empty())
-        load_cubemap(0);
+        load_cubemap(CUBEMAP_INDEX);
 }
 
 void Application::load_cubemap(int index)

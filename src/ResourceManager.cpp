@@ -13,7 +13,6 @@
 #  pragma GCC diagnostic ignored "-Wextra"
 #endif
 #define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
 #include "stb_image.h"
 #ifdef _MSC_VER
 #  pragma warning(pop)
@@ -81,6 +80,20 @@ bool ResourceManager::load_cubemap_cross(
         }
     }
 
+    stbi_image_free(img);
+    return true;
+}
+
+bool ResourceManager::load_image(
+    const std::filesystem::path& path,
+    std::vector<uint8_t>&        pixels,
+    int&                         width,
+    int&                         height)
+{
+    int ch;
+    stbi_uc* img = stbi_load(path.string().c_str(), &width, &height, &ch, 4);
+    if (!img) return false;
+    pixels.assign(img, img + width * height * 4);
     stbi_image_free(img);
     return true;
 }

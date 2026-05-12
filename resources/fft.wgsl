@@ -19,7 +19,7 @@ fn complex_mul(a: vec2f, b: vec2f) -> vec2f {
 }
 
 /* id.x = butterfly index 0..N/2-1, id.y = row 0..N-1 */
-@compute @workgroup_size(32, 32, 1)
+@compute @workgroup_size(16, 16, 1)
 fn fft_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
     let stage  = u.stage;
     let data   = textureLoad(butterfly_tex, vec2i(i32(id.x), i32(stage)), 0);
@@ -42,7 +42,7 @@ fn fft_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 /* id.x = col 0..N-1, id.y = butterfly index 0..N/2-1 */
-@compute @workgroup_size(32, 32, 1)
+@compute @workgroup_size(16, 16, 1)
 fn fft_vertical(@builtin(global_invocation_id) id: vec3<u32>) {
     let stage  = u.stage;
     let data   = textureLoad(butterfly_tex, vec2i(i32(id.y), i32(stage)), 0);

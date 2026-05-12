@@ -1,10 +1,10 @@
 #include "Application.h"
+#include "SimulationConfig.h"
 
 int main(int, char**)
 {
-    constexpr int width  = 1280;
-    constexpr int height = 720;
-    Application app(width, height);
+    SimulationConfig config;
+    Application app(config.app.window_width, config.app.window_height);
 
 #ifdef __EMSCRIPTEN__
     auto callback = [](void* arg) {

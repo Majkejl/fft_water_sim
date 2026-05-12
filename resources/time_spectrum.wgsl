@@ -1,11 +1,11 @@
-struct c_Uniforms {
+struct ComputeUniforms {
     time:  f32,
     stage: u32,
     N:     u32,
     log2n: u32,
 }
 
-@group(0) @binding(0) var<uniform> u:           c_Uniforms;
+@group(0) @binding(0) var<uniform> u:           ComputeUniforms;
 @group(0) @binding(1) var          h_out:        texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var          spectrum_tex: texture_2d<f32>;
 @group(0) @binding(3) var          k_data_tex:   texture_2d<f32>;

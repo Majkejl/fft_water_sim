@@ -126,7 +126,6 @@ if (EMSCRIPTEN)
         -sALLOW_MEMORY_GROWTH
         -sASYNCIFY
         --preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
-        --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/shell.html"
     )
 endif()
 

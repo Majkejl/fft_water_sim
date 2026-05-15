@@ -108,9 +108,23 @@ Application::Application(int w, int h)
 
     ui_panels.push_back([this]() {
         ImGui::Begin("Foam");
-        ImGui::SliderFloat("Threshold", &config.foam.threshold, 0.f, 3.f);
+        ImGui::SliderFloat("Threshold", &config.foam.threshold, 0.7f, 1.1f);
         ImGui::SliderFloat("Erosion",   &config.foam.erosion,   0.9f, 1.0f);
         ImGui::SliderFloat("Foam add",  &config.foam.foam_add,  0.f, 5.f);
+        ImGui::End();
+    });
+
+    ui_panels.push_back([this]() {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(10.f, io.DisplaySize.y - 10.f), ImGuiCond_Always, ImVec2(0.f, 1.f));
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        ImGui::Begin("##controls", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+        ImGui::Text("        CONTROLS");
+        ImGui::Text("Move camera - LMB + drag");
+        ImGui::Text("   Zoom     -  Scroll");
         ImGui::End();
     });
 }

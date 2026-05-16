@@ -34,7 +34,7 @@ add_library(imgui_lib STATIC
 )
 target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
+    ${imgui_SOURCE_DIR}/backends 
 )
 target_link_libraries(imgui_lib PUBLIC glfw webgpu)
     

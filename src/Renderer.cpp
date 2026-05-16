@@ -61,7 +61,7 @@ void Renderer::init(wgpu::Device d, wgpu::Queue q, wgpu::TextureFormat fmt,
 
     BufferDescriptor buf_desc;
     buf_desc.mappedAtCreation = false;
-    buf_desc.size  = sizeof(MyUniforms);
+    buf_desc.size  = sizeof(RenderUniforms);
     buf_desc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
     uniform_buffer = device.createBuffer(buf_desc);
 }
@@ -73,7 +73,7 @@ void Renderer::rebuild_bind_group(const OceanSim& ocean, int foam_idx)
     std::vector<BindGroupEntry> entries(10, Default);
     entries[0].binding = 0;  entries[0].buffer      = uniform_buffer;
                               entries[0].offset       = 0;
-                              entries[0].size         = sizeof(MyUniforms);
+                              entries[0].size         = sizeof(RenderUniforms);
     entries[1].binding = 1;  entries[1].textureView  = ocean.height_view();
     entries[2].binding = 2;  entries[2].sampler      = sampler;
     entries[3].binding = 3;  entries[3].textureView  = cubemap_texture_view;
@@ -91,19 +91,23 @@ void Renderer::rebuild_bind_group(const OceanSim& ocean, int foam_idx)
     bind_group      = device.createBindGroup(desc);
 }
 
-void Renderer::draw(wgpu::RenderPassEncoder pass, const MyUniforms& uniforms)
+void Renderer::draw(wgpu::RenderPassEncoder pass, const RenderUniforms& uniforms)
 {
-    queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(MyUniforms));
+    queue.writeBuffer(uniform_buffer, 0, &uniforms, sizeof(RenderUniforms));
 
+    pass.pushDebugGroup("Water Mesh");
     pass.setPipeline(pipeline);
     pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer.getSize());
     pass.setIndexBuffer(index_buffer, IndexFormat::Uint32, 0, index_buffer.getSize());
     pass.setBindGroup(0, bind_group, 0, nullptr);
     pass.drawIndexed(index_count, 9, 0, 0, 0);
+    pass.popDebugGroup();
 
+    pass.pushDebugGroup("Skybox");
     pass.setPipeline(skybox_pipeline);
     pass.setBindGroup(0, bind_group, 0, nullptr);
     pass.draw(3, 1, 0, 0);
+    pass.popDebugGroup();
 }
 
 void Renderer::init_cubemap(const SimulationConfig& config)
@@ -193,12 +197,12 @@ void Renderer::init_pipelines()
 
     // --- bind group layout (shared by both render pipelines) ---
     std::vector<BindGroupLayoutEntry> entries = {
-        uniform_layout (0, ShaderStage::Vertex | ShaderStage::Fragment, false, sizeof(MyUniforms)),
+        uniform_layout (0, ShaderStage::Vertex | ShaderStage::Fragment, false, sizeof(RenderUniforms)),
         texture_layout (1, ShaderStage::Vertex | ShaderStage::Fragment),
         sampler_layout (2, ShaderStage::Fragment),
         texture_layout (3, ShaderStage::Fragment, TextureSampleType::Float, TextureViewDimension::Cube),
-        texture_layout (4, ShaderStage::Fragment, TextureSampleType::Float),
-        texture_layout (5, ShaderStage::Fragment, TextureSampleType::Float),
+        texture_layout (4, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
+        texture_layout (5, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
         texture_layout (6, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
         texture_layout (7, ShaderStage::Vertex,   TextureSampleType::UnfilterableFloat),
         texture_layout (8, ShaderStage::Fragment, TextureSampleType::Float),

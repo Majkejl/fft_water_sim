@@ -1,11 +1,11 @@
-struct ComputeUniforms {
+struct FourierUniforms {
     time:  f32,
     stage: u32,
     N:     u32,
     log2n: u32,
 }
 
-@group(0) @binding(0) var<uniform> u:            ComputeUniforms;
+@group(0) @binding(0) var<uniform> u:            FourierUniforms;
 @group(0) @binding(1) var          out_tex:       texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var          in_tex:        texture_2d<f32>;
 @group(0) @binding(3) var          butterfly_tex: texture_2d<f32>;

@@ -1,8 +1,12 @@
 #include "Application.h"
 #include "SimulationConfig.h"
 
+#include <cstdlib>
+
 int main(int, char**)
 {
+    // _putenv_s("WGPU_VALIDATION", "1");
+
     SimulationConfig config;
     Application app(config.app.window_width, config.app.window_height);
 

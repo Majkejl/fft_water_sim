@@ -114,7 +114,7 @@ Application::Application(int w, int h)
         ImGui::End();
     });
 
-    ui_panels.push_back([this]() {
+    ui_panels.push_back([]() {
         ImGuiIO& io = ImGui::GetIO();
         ImGui::SetNextWindowPos(ImVec2(10.f, io.DisplaySize.y - 10.f), ImGuiCond_Always, ImVec2(0.f, 1.f));
         ImGui::SetNextWindowBgAlpha(0.35f);
@@ -207,7 +207,10 @@ void Application::main_loop()
     RenderPassEncoder pass = encoder.beginRenderPass(pass_desc);
 
     renderer.draw(pass, uniforms);
+
+    pass.pushDebugGroup("ImGui");
     render_ui(pass);
+    pass.popDebugGroup();
 
     pass.end();
     pass.release();
@@ -331,7 +334,7 @@ RequiredLimits Application::get_required_limits(Adapter adapter) const
     limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
     limits.limits.maxBindGroups             = 2;
     limits.limits.maxUniformBuffersPerShaderStage = 1;
-    limits.limits.maxUniformBufferBindingSize     = sizeof(MyUniforms);
+    limits.limits.maxUniformBufferBindingSize     = sizeof(RenderUniforms);
     limits.limits.maxTextureDimension1D     = std::max({ width, height, TEXTURE_SIZE });
     limits.limits.maxTextureDimension2D     = std::max({ width, height, TEXTURE_SIZE });
     limits.limits.maxTextureArrayLayers     = 6;

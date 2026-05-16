@@ -37,8 +37,8 @@ struct CameraConfig {
 
 struct AppConfig {
     int cubemap_index = 22;
-    int window_width  = 1920;
-    int window_height = 1080;
+    int window_width  = 1280;
+    int window_height = 720;
 };
 
 struct SimulationConfig {

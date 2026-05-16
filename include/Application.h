@@ -31,7 +31,7 @@ class Application
     SimulationConfig config;
 
     // --- CPU-side render uniforms ---
-    MyUniforms uniforms;
+    RenderUniforms uniforms;
 
     // --- window / WebGPU core ---
     uint32_t    width, height;

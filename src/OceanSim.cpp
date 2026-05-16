@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numbers>
 #include <random>
@@ -188,8 +189,8 @@ int OceanSim::tick(float time, const SimulationConfig& config)
        select its slot via a dynamic offset within a single compute pass. */
     std::vector<uint8_t> ubuf(compute_uniform_stride * TEXTURE_LOG, 0);
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
-        ComputeUniforms cu{ time, static_cast<uint32_t>(s), TEXTURE_SIZE, TEXTURE_LOG };
-        std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(ComputeUniforms));
+        FourierUniforms cu{ time, static_cast<uint32_t>(s), TEXTURE_SIZE, TEXTURE_LOG };
+        std::memcpy(ubuf.data() + s * compute_uniform_stride, &cu, sizeof(FourierUniforms));
     }
     queue.writeBuffer(compute_uniform_buffer, 0, ubuf.data(), ubuf.size());
 
@@ -203,19 +204,26 @@ int OceanSim::tick(float time, const SimulationConfig& config)
     queue.writeBuffer(foam_uniform_buffer, 0, &fu, sizeof(FoamUniforms));
 
     CommandEncoder encoder = device.createCommandEncoder(CommandEncoderDescriptor{});
+    encoder.pushDebugGroup("OceanSim::tick");
 
     ComputePassDescriptor pass_desc;
     pass_desc.timestampWrites = nullptr;
     ComputePassEncoder pass   = encoder.beginComputePass(pass_desc);
 
     /* timeSpectrum: evolve h0(k) → h(k,t) and compute slope + displacement spectra. */
+    pass.pushDebugGroup("Time Spectrum");
     pass.setPipeline(time_spectrum_pipeline);
     pass.setBindGroup(0, time_spectrum_bind_group, 0, nullptr);
     pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 16, 1);
+    pass.popDebugGroup();
 
     /* Horizontal IFFT for all 5 channels, TEXTURE_LOG stages each. */
+    pass.pushDebugGroup("FFT Horizontal");
     pass.setPipeline(fft_h_pipeline);
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Stage %u", s);
+        pass.pushDebugGroup(buf);
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         pass.setBindGroup(0, h_fft_bind_groups [1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
@@ -227,11 +235,17 @@ int OceanSim::tick(float time, const SimulationConfig& config)
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
         pass.setBindGroup(0, dy_fft_bind_groups[1 - s % 2], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 2 / 16, TEXTURE_SIZE / 16, 1);
+        pass.popDebugGroup();
     }
+    pass.popDebugGroup();
 
     /* Vertical IFFT — transposed dispatch, offset ping-pong index by TEXTURE_LOG. */
+    pass.pushDebugGroup("FFT Vertical");
     pass.setPipeline(fft_v_pipeline);
     for (unsigned s = 0; s < TEXTURE_LOG; s++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Stage %u", s);
+        pass.pushDebugGroup(buf);
         uint32_t off = static_cast<uint32_t>(s) * compute_uniform_stride;
         int bg = (TEXTURE_LOG + s + 1) % 2;
         pass.setBindGroup(0, h_fft_bind_groups [bg], 1, &off);
@@ -244,18 +258,23 @@ int OceanSim::tick(float time, const SimulationConfig& config)
         pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
         pass.setBindGroup(0, dy_fft_bind_groups[bg], 1, &off);
         pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 2 / 16, 1);
+        pass.popDebugGroup();
     }
+    pass.popDebugGroup();
 
     /* Foam: mark breaking pixels (J < threshold), erode previous accumulation. */
+    pass.pushDebugGroup("Foam");
     pass.setPipeline(foam_pipeline);
     pass.setBindGroup(0, foam_bind_groups[foam_frame % 2], 0, nullptr);
     pass.dispatchWorkgroups(TEXTURE_SIZE / 16, TEXTURE_SIZE / 16, 1);
+    pass.popDebugGroup();
 
     pass.end();
 #ifndef WEBGPU_BACKEND_WGPU
     wgpuComputePassEncoderRelease(pass);
 #endif
 
+    encoder.popDebugGroup();
     CommandBuffer commands = encoder.finish(CommandBufferDescriptor{});
     queue.submit(commands);
 #ifndef WEBGPU_BACKEND_WGPU
@@ -285,7 +304,7 @@ void OceanSim::init_pipelines()
             RESOURCE_DIR "/time_spectrum.wgsl", device);
 
         std::vector<BindGroupLayoutEntry> ts_entries = {
-            uniform_layout        (0, ShaderStage::Compute, false, sizeof(ComputeUniforms)),
+            uniform_layout        (0, ShaderStage::Compute, false, sizeof(FourierUniforms)),
             storage_texture_layout(1, ShaderStage::Compute),
             texture_layout        (2, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
             texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
@@ -322,7 +341,7 @@ void OceanSim::init_pipelines()
             RESOURCE_DIR "/fft.wgsl", device);
 
         std::vector<BindGroupLayoutEntry> fft_entries = {
-            uniform_layout        (0, ShaderStage::Compute, true, sizeof(ComputeUniforms)),
+            uniform_layout        (0, ShaderStage::Compute, true, sizeof(FourierUniforms)),
             storage_texture_layout(1, ShaderStage::Compute),
             texture_layout        (2, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
             texture_layout        (3, ShaderStage::Compute, TextureSampleType::UnfilterableFloat),
@@ -394,7 +413,7 @@ void OceanSim::init_pipelines()
 
 void OceanSim::init_buffers()
 {
-    compute_uniform_stride = (sizeof(ComputeUniforms) + 255u) & ~255u;
+    compute_uniform_stride = (sizeof(FourierUniforms) + 255u) & ~255u;
 
     BufferDescriptor buf_desc;
     buf_desc.mappedAtCreation = false;
@@ -548,7 +567,7 @@ void OceanSim::init_bind_groups()
         std::vector<BindGroupEntry> e(8, Default);
         e[0].binding = 0;  e[0].buffer      = compute_uniform_buffer;
                            e[0].offset       = 0;
-                           e[0].size         = sizeof(ComputeUniforms);
+                           e[0].size         = sizeof(FourierUniforms);
         e[1].binding = 1;  e[1].textureView  = height_texture_views[0];
         e[2].binding = 2;  e[2].textureView  = spectrum_texture_view;
         e[3].binding = 3;  e[3].textureView  = k_data_texture_view;
@@ -569,7 +588,7 @@ void OceanSim::init_bind_groups()
         std::vector<BindGroupEntry> e(4, Default);
         e[0].binding = 0;  e[0].buffer     = compute_uniform_buffer;
                            e[0].offset      = 0;
-                           e[0].size        = sizeof(ComputeUniforms);
+                           e[0].size        = sizeof(FourierUniforms);
         e[3].binding = 3;  e[3].textureView = butterfly_texture_view;
 
         BindGroupDescriptor desc;

@@ -13,7 +13,7 @@
 
 /* Render-side uniforms uploaded to the GPU each frame.
    Layout must exactly match MyUniforms in water.wgsl and skybox.wgsl. */
-struct MyUniforms {
+struct RenderUniforms {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 projection;
@@ -88,7 +88,7 @@ public:
     void rebuild_bind_group(const OceanSim& ocean, int foam_idx);
 
     /* Uploads uniforms to the GPU, then issues the water mesh and skybox draw calls. */
-    void draw(wgpu::RenderPassEncoder pass, const MyUniforms& uniforms);
+    void draw(wgpu::RenderPassEncoder pass, const RenderUniforms& uniforms);
 
     /* Scans RESOURCE_DIR/Cubemap/ for PNGs and loads the one at the given index. */
     void init_cubemap(const SimulationConfig& config);

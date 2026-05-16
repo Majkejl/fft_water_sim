@@ -7,7 +7,7 @@
 #include <cstdint>
 
 /* Per-dispatch compute uniforms. Layout must match ComputeUniforms in fft.wgsl and time_spectrum.wgsl. */
-struct ComputeUniforms {
+struct FourierUniforms {
     float    time;
     uint32_t stage;
     uint32_t N;

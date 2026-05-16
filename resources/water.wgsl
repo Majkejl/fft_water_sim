@@ -11,7 +11,7 @@ struct VertexOutput {
 	@location(2) fs_uv: vec2f,
 };
 
-struct MyUniforms {
+struct RenderUniforms {
 	model:      mat4x4<f32>,
 	view:       mat4x4<f32>,
 	proj:       mat4x4<f32>,
@@ -21,7 +21,7 @@ struct MyUniforms {
 	lambda:     f32,
 }
 
-@group(0) @binding(0) var<uniform> u:            MyUniforms;
+@group(0) @binding(0) var<uniform> u:            RenderUniforms;
 @group(0) @binding(1) var          heightTexture: texture_2d<f32>;
 @group(0) @binding(2) var          envSampler:    sampler;
 @group(0) @binding(3) var          envMap:        texture_cube<f32>;
@@ -46,6 +46,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	let dx = textureLoad(disp_x_tex,   tc, 0).r * inv * scale_xy;
 	let dy = textureLoad(disp_y_tex,   tc, 0).r * inv * scale_xy;
 
+	let sx = textureLoad(slope_x_tex, tc, 0).r * inv * (u.patch_size * 0.5);
+	let sy = textureLoad(slope_y_tex, tc, 0).r * inv * (u.patch_size * 0.5);
+
 	let tile_x = f32(i32(in.instance) % 3 - 1);
 	let tile_y = f32(i32(in.instance) / 3 - 1);
 
@@ -55,7 +58,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	let worldPos4 = u.model * vec4f(localPos, 1.0);
 
 	out.fs_position = worldPos4.xyz;
-	out.fs_normal   = vec3f(0.0);
+	out.fs_normal   = normalize(vec3f(-sx, -sy, 1.0));
 	out.fs_uv       = uv;
 	out.position    = u.proj * u.view * worldPos4;
 
@@ -65,10 +68,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
-	let inv = 1.0 / (u.N * u.N);
-	let sx  = textureSample(slope_x_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
-	let sy  = textureSample(slope_y_tex, envSampler, in.fs_uv).r * inv * (u.patch_size * 0.5);
-	let N   = normalize(vec3f(-sx, -sy, 1.0));
+	let N = normalize(in.fs_normal);
 
 	let L = normalize(vec3f(0.5, 0.5, 1.0));
 	let V = normalize(u.eye - in.fs_position);

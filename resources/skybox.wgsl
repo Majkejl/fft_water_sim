@@ -1,11 +1,11 @@
-struct MyUniforms {
+struct RenderUniforms {
 	model: mat4x4<f32>,
 	view: mat4x4<f32>,
 	proj: mat4x4<f32>,
 	eye: vec3f,
 }
 
-@group(0) @binding(0) var<uniform> u: MyUniforms;
+@group(0) @binding(0) var<uniform> u: RenderUniforms;
 @group(0) @binding(2) var envSampler: sampler;
 @group(0) @binding(3) var envMap: texture_cube<f32>;
 

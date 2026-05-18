@@ -79,7 +79,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let foam_mask   = foam * foam_detail;
 
 	let diff       = max(dot(N, L), 0.0);
-	let spec_power = mix(64.0, 4.0, foam_mask);
+	let spec_power = mix(128.0, 4.0, foam_mask);
 	let spec       = pow(max(dot(N, H), 0.0), spec_power);
 
 	let water = vec3f(0.0, 0.35, 0.75);

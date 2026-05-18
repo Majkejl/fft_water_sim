@@ -161,7 +161,7 @@ void Application::main_loop()
     uniforms.projection = glm::perspective(
         glm::radians(45.f),
         static_cast<float>(width) / static_cast<float>(height),
-        0.1f, config.ocean.patch_size * 10.f);
+        0.01f, config.ocean.patch_size * 20.f);
     uniforms.model      = glm::scale(glm::mat4(1.f), glm::vec3(config.ocean.patch_size));
     uniforms.N          = static_cast<float>(TEXTURE_SIZE);
     uniforms.patch_size = config.ocean.patch_size;
